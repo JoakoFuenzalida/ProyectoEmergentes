@@ -1,5 +1,6 @@
 using UnityEngine;
 using TMPro;
+using UnityEngine.SceneManagement; // ¡NUEVO! Necesario para recargar la escena
 
 public class UIGameController : MonoBehaviour
 {
@@ -16,12 +17,20 @@ public class UIGameController : MonoBehaviour
     [SerializeField] private TMP_InputField inputRespuesta;
     [SerializeField] private TMP_Text textoPreguntaPrincipal;
 
-    [Header("Tablero de 8 Casillas (Arrastrar aquí)")]
+    [Header("Tablero de 8 Casillas")]
     [SerializeField] private TMP_Text[] casillasRespuestas = new TMP_Text[8];
     [SerializeField] private TMP_Text[] casillasPuntos = new TMP_Text[8];
 
+    [Header("Menú de Pausa")] // ¡NUEVO!
+    [SerializeField] private GameObject panelPausa;
+
     private float localTimer = 0f;
     private bool isCounting = false;
+
+    // Variables para recordar cómo estaba el mouse
+    private bool isPaused = false;
+    private CursorLockMode previousLockMode;
+    private bool previousCursorVisible;
 
     private void Start()
     {
@@ -34,6 +43,8 @@ public class UIGameController : MonoBehaviour
 
     private void HandleStateChanged(GameStateManager.GameState newState)
     {
+        if (isPaused) TogglePauseMenu(); // Si estábamos en pausa, lo cerramos por seguridad
+
         switch (newState)
         {
             case GameStateManager.GameState.Countdown:
@@ -41,10 +52,9 @@ public class UIGameController : MonoBehaviour
                 if (roomPanel) roomPanel.SetActive(false);
                 if (panelPregunta) panelPregunta.SetActive(true);
                 if (panelCountdown) panelCountdown.SetActive(true);
-                if (panelRespuestas) panelRespuestas.SetActive(true); // Encendemos el tablero vacío
+                if (panelRespuestas) panelRespuestas.SetActive(true);
                 if (inputRespuesta) inputRespuesta.gameObject.SetActive(false);
 
-                // Cargar la pregunta hardcodeada
                 if (textoPreguntaPrincipal != null && GameStateManager.Instance != null)
                     textoPreguntaPrincipal.text = GameStateManager.Instance.PreguntaActual;
 
@@ -80,7 +90,60 @@ public class UIGameController : MonoBehaviour
                 Cursor.lockState = CursorLockMode.Locked; Cursor.visible = false;
                 break;
                 
-            // ... (Faltan WaitingForPlayers y GameOver que son iguales a lo que tenías, los puedes omitir o dejar apagando paneles)
+            case GameStateManager.GameState.WaitingForPlayers:
+                isCounting = false;
+                if (lobbyPanel) lobbyPanel.SetActive(true);
+                if (panelPregunta) panelPregunta.SetActive(false);
+                if (panelRespuestas) panelRespuestas.SetActive(false);
+                if (panelCountdown) panelCountdown.SetActive(false);
+                if (inputRespuesta) inputRespuesta.gameObject.SetActive(false);
+
+                Cursor.lockState = CursorLockMode.None; Cursor.visible = true;
+                break;
+        }
+    }
+
+    private void Update()
+    {
+        // --- DETECTAR LA TECLA ESCAPE ---
+        if (Input.GetKeyDown(KeyCode.Escape))
+        {
+            TogglePauseMenu();
+        }
+
+        if (isCounting && panelCountdown != null)
+        {
+            localTimer -= Time.deltaTime;
+            TMP_Text texto = panelCountdown.GetComponent<TMP_Text>();
+            if (texto != null)
+            {
+                int segundos = Mathf.CeilToInt(localTimer);
+                texto.text = segundos <= 0 ? "¡PREPÁRATE!" : segundos.ToString();
+            }
+        }
+
+        if (GameStateManager.Instance != null && panelRespuestas != null && panelRespuestas.activeSelf)
+        {
+            int mask = GameStateManager.Instance.RevealedAnswersMask;
+            string[] correctas = GameStateManager.Instance.RespuestasValidas;
+            int[] puntos = GameStateManager.Instance.PuntosRespuestas;
+
+            for (int i = 0; i < 8; i++)
+            {
+                if (casillasRespuestas[i] != null && casillasPuntos[i] != null)
+                {
+                    if (i < correctas.Length && (mask & (1 << i)) != 0)
+                    {
+                        casillasRespuestas[i].text = correctas[i];
+                        casillasPuntos[i].text = puntos[i].ToString();
+                    }
+                    else
+                    {
+                        casillasRespuestas[i].text = $"--- {i + 1} ---";
+                        casillasPuntos[i].text = "--";
+                    }
+                }
+            }
         }
     }
 
@@ -96,45 +159,44 @@ public class UIGameController : MonoBehaviour
         }
     }
 
-    private void Update()
+    // ==========================================
+    // LÓGICA DEL MENÚ DE PAUSA Y BOTONES
+    // ==========================================
+    public void TogglePauseMenu()
     {
-        // 1. Reloj Visual
-        if (isCounting && panelCountdown != null)
-        {
-            localTimer -= Time.deltaTime;
-            TMP_Text texto = panelCountdown.GetComponent<TMP_Text>();
-            if (texto != null)
-            {
-                int segundos = Mathf.CeilToInt(localTimer);
-                texto.text = segundos <= 0 ? "¡PREPÁRATE!" : segundos.ToString();
-            }
-        }
+        if (panelPausa == null) return;
 
-        // 2. ACTUALIZAR EL TABLERO MÁGICAMENTE EN TIEMPO REAL
-        if (GameStateManager.Instance != null && panelRespuestas != null && panelRespuestas.activeSelf)
-        {
-            int mask = GameStateManager.Instance.RevealedAnswersMask;
-            string[] correctas = GameStateManager.Instance.RespuestasValidas;
-            int[] puntos = GameStateManager.Instance.PuntosRespuestas;
+        isPaused = !isPaused;
+        panelPausa.SetActive(isPaused);
 
-            for (int i = 0; i < 8; i++)
-            {
-                if (casillasRespuestas[i] != null && casillasPuntos[i] != null)
-                {
-                    // Si el índice existe en nuestras respuestas Y la máscara dice que está revelado...
-                    if (i < correctas.Length && (mask & (1 << i)) != 0)
-                    {
-                        casillasRespuestas[i].text = correctas[i];
-                        casillasPuntos[i].text = puntos[i].ToString();
-                    }
-                    else
-                    {
-                        // Si no, mostramos los signos de interrogación (incluso las 3 que sobran)
-                        casillasRespuestas[i].text = $"--- {i + 1} ---";
-                        casillasPuntos[i].text = "--";
-                    }
-                }
-            }
+        if (isPaused)
+        {
+            previousLockMode = Cursor.lockState;
+            previousCursorVisible = Cursor.visible;
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
         }
+        else
+        {
+            Cursor.lockState = previousLockMode;
+            Cursor.visible = previousCursorVisible;
+        }
+    }
+
+    public void Btn_SalirAlLobby()
+    {
+        if (GameStateManager.Instance != null && GameStateManager.Instance.Runner != null)
+        {
+            GameStateManager.Instance.Runner.Shutdown();
+        }
+        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+    }
+
+    public void Btn_SalirDelJuego()
+    {
+        Application.Quit();
+        #if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+        #endif
     }
 }
