@@ -78,23 +78,41 @@ public class TurnManager : NetworkBehaviour
     {
         if (!Object.HasStateAuthority) return;
 
-        List<PlayerRef> teamPlayers = TeamAssigner.Instance.GetPlayersInTeam(team);
-        if (teamPlayers.Count == 0)
+        // LA CLAVE: Ignoramos la basura de red y usamos nuestras constantes puras
+        bool isTeamB = team != null && team.Contains("B");
+        int targetTeamIndex = isTeamB ? 2 : 1;
+        string safeTeamKey = isTeamB ? TeamAssigner.TEAM_B : TeamAssigner.TEAM_A; // Llave segura para el diccionario
+        
+        PlayerRef nextPlayer = PlayerRef.None;
+
+        List<PlayerRef> teamPlayers = new List<PlayerRef>();
+        foreach (var pRef in Runner.ActivePlayers)
         {
-            Debug.LogWarning($"[TurnManager] No hay jugadores en equipo {team}");
-            return;
+            var data = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>();
+            if (data != null && data.TeamIndex == targetTeamIndex)
+            {
+                teamPlayers.Add(pRef);
+            }
         }
 
-        int idx = _teamTurnIndex[team] % teamPlayers.Count;
-        _teamTurnIndex[team] = idx + 1;
+        if (teamPlayers.Count > 0)
+        {
+            teamPlayers.Sort((a, b) => {
+                var dA = Runner.GetPlayerObject(a).GetComponent<PlayerNetworkData>();
+                var dB = Runner.GetPlayerObject(b).GetComponent<PlayerNetworkData>();
+                return dA.SeatIndex.CompareTo(dB.SeatIndex);
+            });
 
-        ActivePlayer  = teamPlayers[idx];
-        TurnTimeLeft  = turnDurationSeconds;
+            // Usamos la llave segura para evitar el KeyNotFoundException
+            int idx = _teamTurnIndex[safeTeamKey] % teamPlayers.Count;
+            nextPlayer = teamPlayers[idx];
+            _teamTurnIndex[safeTeamKey] = (idx + 1) % teamPlayers.Count;
+        }
+
+        ActivePlayer = nextPlayer;
+        TurnTimeLeft = turnDurationSeconds;
         _timerRunning = true;
-
-        Debug.Log($"[TurnManager] Turno → Jugador {ActivePlayer} (Equipo {team})");
     }
-
     public void ResetTurnIndices()
     {
         _teamTurnIndex[TeamAssigner.TEAM_A] = 0;
@@ -104,20 +122,11 @@ public class TurnManager : NetworkBehaviour
     private void HandleStateChanged(GameStateManager.GameState newState)
     {
         if (!Object.HasStateAuthority) return;
-        switch (newState)
+
+        if (newState == GameStateManager.GameState.RoundEnd || newState == GameStateManager.GameState.GameOver)
         {
-            case GameStateManager.GameState.Playing:
-                ResetTurnIndices();
-                AdvanceTurnInTeam(GameStateManager.Instance.ActiveTeam.ToString());
-                break;
-            case GameStateManager.GameState.Stealing:
-                AdvanceTurnInTeam(GameStateManager.Instance.ActiveTeam.ToString());
-                break;
-            case GameStateManager.GameState.RoundEnd:
-            case GameStateManager.GameState.GameOver:
-                _timerRunning = false;
-                TurnTimeLeft  = 0f;
-                break;
+            _timerRunning = false;
+            TurnTimeLeft  = 0f;
         }
     }
 

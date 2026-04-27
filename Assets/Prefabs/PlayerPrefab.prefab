@@ -15,6 +15,7 @@ GameObject:
   - component: {fileID: 1186683533541551255}
   - component: {fileID: 6317534443510676006}
   - component: {fileID: -4735486595205752341}
+  - component: {fileID: -3967745545993960793}
   m_Layer: 0
   m_Name: PlayerPrefab
   m_TagString: Untagged
@@ -137,6 +138,7 @@ MonoBehaviour:
   NetworkedBehaviours:
   - {fileID: 6317534443510676006}
   - {fileID: -4735486595205752341}
+  - {fileID: -3967745545993960793}
   ForceRemoteRenderTimeframe: 0
 --- !u!114 &6317534443510676006
 MonoBehaviour:
@@ -169,6 +171,25 @@ MonoBehaviour:
   SyncParent: 0
   _autoAOIOverride: 1
   DisableSharedModeInterpolation: 0
+--- !u!114 &-3967745545993960793
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5036333324789450146}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 22176a85687e2924fb94a3c54376a18f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::PlayerNetworkData
+  _PlayerName:
+    _length: 0
+    _data:
+      Data: 0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  _TeamIndex: 0
+  _IsLeader:
+    _value: 0
 --- !u!1 &7418736532377589196
 GameObject:
   m_ObjectHideFlags: 0
