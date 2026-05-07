@@ -159,7 +159,8 @@ public class PlayerController : NetworkBehaviour
         if (asientos == null || asientos.Length == 0) return null;
         return asientos[Mathf.Clamp(seatIndex, 0, asientos.Length - 1)];
     }
-}using UnityEngine;
+}
+using UnityEngine;
 using Fusion;
 
 public class PlayerController : NetworkBehaviour
