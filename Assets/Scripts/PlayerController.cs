@@ -5,20 +5,21 @@ public class PlayerController : NetworkBehaviour
 {
     public Camera playerCamera;
     public float sensitivity = 2f;
-    
+
     private float xRotation = 0f;
     private float yRotation = 0f;
-
-    private Transform destinoActual = null; 
+    private Transform destinoActual = null;
 
     public override void Spawned()
     {
         if (!Object.HasInputAuthority)
         {
             playerCamera.enabled = false;
-            playerCamera.GetComponent<AudioListener>().enabled = false;
+            // BUG FIX: verificar que el AudioListener existe antes de acceder
+            var audioListener = playerCamera.GetComponent<AudioListener>();
+            if (audioListener != null) audioListener.enabled = false;
         }
-        
+
         GameStateManager.OnStateChangedEvent += HandleStateChanged;
     }
 
@@ -34,69 +35,83 @@ public class PlayerController : NetworkBehaviour
         var myData = GetComponent<PlayerNetworkData>();
         if (myData == null || myData.TeamIndex == 0) return;
 
-        // --- LA MAGIA DINÁMICA ---
-        // Contamos cuántos jugadores hay en mi equipo para rotar los turnos correctamente
+        // Contar jugadores en mi equipo para rotar turnos
         int jugadoresEnMiEquipo = 0;
         foreach (var pRef in Runner.ActivePlayers)
         {
             var d = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>();
             if (d != null && d.TeamIndex == myData.TeamIndex) jugadoresEnMiEquipo++;
         }
-        if (jugadoresEnMiEquipo == 0) jugadoresEnMiEquipo = 1; // Seguridad
+        if (jugadoresEnMiEquipo == 0) jugadoresEnMiEquipo = 1;
 
-        // Ahora rotamos el turno según los jugadores que de verdad existen
         int turnoActual = (GameStateManager.Instance.CurrentRound - 1) % jugadoresEnMiEquipo;
         bool meTocaElPodio = (myData.SeatIndex == turnoActual);
 
         Transform nuevoDestino = null;
 
-        if (newState == GameStateManager.GameState.Countdown || 
-            newState == GameStateManager.GameState.WaitingForBuzzer || 
+        if (newState == GameStateManager.GameState.Countdown ||
+            newState == GameStateManager.GameState.WaitingForBuzzer ||
             newState == GameStateManager.GameState.TypingAnswer)
         {
-            nuevoDestino = (myData.TeamIndex == 1) ? StageManager.Instance.podioEquipoA : StageManager.Instance.podioEquipoB;
+            nuevoDestino = (myData.TeamIndex == 1)
+                ? StageManager.Instance.podioEquipoA
+                : StageManager.Instance.podioEquipoB;
+
             if (!meTocaElPodio)
             {
-                nuevoDestino = (myData.TeamIndex == 1) ? StageManager.Instance.asientosEquipoA[myData.SeatIndex] : StageManager.Instance.asientosEquipoB[myData.SeatIndex];
+                // BUG FIX: verificar que el SeatIndex no se salga del array
+                var asientos = (myData.TeamIndex == 1)
+                    ? StageManager.Instance.asientosEquipoA
+                    : StageManager.Instance.asientosEquipoB;
+
+                if (asientos != null && myData.SeatIndex < asientos.Length)
+                    nuevoDestino = asientos[myData.SeatIndex];
+                else if (asientos != null && asientos.Length > 0)
+                    nuevoDestino = asientos[0]; // Fallback al primer asiento
             }
         }
         else
         {
-            nuevoDestino = (myData.TeamIndex == 1) ? StageManager.Instance.asientosEquipoA[myData.SeatIndex] : StageManager.Instance.asientosEquipoB[myData.SeatIndex];
+            // BUG FIX: misma protección de índice para el estado Playing/Stealing
+            var asientos = (myData.TeamIndex == 1)
+                ? StageManager.Instance.asientosEquipoA
+                : StageManager.Instance.asientosEquipoB;
+
+            if (asientos != null && myData.SeatIndex < asientos.Length)
+                nuevoDestino = asientos[myData.SeatIndex];
+            else if (asientos != null && asientos.Length > 0)
+                nuevoDestino = asientos[0];
         }
 
         if (nuevoDestino == null) return;
 
-        // 1. EL SERVIDOR MUEVE LOS CUERPOS FÍSICOS Y LOS ROTA CORRECTAMENTE
+        // El servidor mueve los cuerpos físicos
         if (Object.HasStateAuthority)
         {
             var charController = GetComponent<CharacterController>();
             var networkTransform = GetComponent<NetworkTransform>();
 
-            if (charController != null) charController.enabled = false; 
+            if (charController != null) charController.enabled = false;
 
-            if (networkTransform != null) 
-            {
+            if (networkTransform != null)
                 networkTransform.Teleport(nuevoDestino.position, nuevoDestino.rotation);
-            }
-            else 
+            else
             {
                 transform.position = nuevoDestino.position;
                 transform.rotation = nuevoDestino.rotation;
             }
 
-            if (charController != null) charController.enabled = true; 
+            if (charController != null) charController.enabled = true;
         }
 
-        // 2. EL DUEÑO DE LA CÁMARA LA ACOMODA (Solo si se movió de lugar)
+        // El dueño de la cámara la acomoda
         if (Object.HasInputAuthority)
         {
             if (destinoActual != nuevoDestino)
             {
-                destinoActual = nuevoDestino; 
-                
+                destinoActual = nuevoDestino;
                 xRotation = 0f;
-                yRotation = 0f; 
+                yRotation = 0f;
                 playerCamera.transform.localRotation = Quaternion.Euler(xRotation, yRotation, 0f);
             }
         }
@@ -104,45 +119,47 @@ public class PlayerController : NetworkBehaviour
 
     void Update()
     {
-        if (Object.HasInputAuthority)
+        if (!Object.HasInputAuthority) return;
+
+        // Movimiento de cámara
+        if (Cursor.lockState == CursorLockMode.Locked)
         {
-            if (Cursor.lockState == CursorLockMode.Locked)
-            {
-                float mouseX = Input.GetAxis("Mouse X") * sensitivity;
-                float mouseY = Input.GetAxis("Mouse Y") * sensitivity;
+            float mouseX = Input.GetAxis("Mouse X") * sensitivity;
+            float mouseY = Input.GetAxis("Mouse Y") * sensitivity;
 
-                xRotation -= mouseY;
-                xRotation = Mathf.Clamp(xRotation, -80f, 80f); 
-
-                yRotation += mouseX;
-                playerCamera.transform.localRotation = Quaternion.Euler(xRotation, yRotation, 0f);
-            }
-
-            if (Input.GetKeyDown(KeyCode.Space))
-            {
-                if (GameStateManager.Instance != null && GameStateManager.Instance.CurrentState == GameStateManager.GameState.WaitingForBuzzer)
-                {
-                    var myData = GetComponent<PlayerNetworkData>();
-                    if (myData != null)
-                    {
-                        // Repetimos la lógica del conteo para el botón
-                        int jugadoresEnMiEquipo = 0;
-                        foreach (var pRef in Runner.ActivePlayers)
-                        {
-                            var d = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>();
-                            if (d != null && d.TeamIndex == myData.TeamIndex) jugadoresEnMiEquipo++;
-                        }
-                        if (jugadoresEnMiEquipo == 0) jugadoresEnMiEquipo = 1;
-
-                        int turnoActual = (GameStateManager.Instance.CurrentRound - 1) % jugadoresEnMiEquipo;
-                        
-                        if (myData.SeatIndex == turnoActual)
-                        {
-                            GameStateManager.Instance.RPC_PressBuzzer(Runner.LocalPlayer.PlayerId);
-                        }
-                    }
-                }
-            }
+            xRotation -= mouseY;
+            xRotation = Mathf.Clamp(xRotation, -80f, 80f);
+            yRotation += mouseX;
+            playerCamera.transform.localRotation = Quaternion.Euler(xRotation, yRotation, 0f);
         }
+
+        // BUG FIX: Buzzer — eliminar lógica duplicada y centralizar en un método
+        if (Input.GetKeyDown(KeyCode.Space))
+            TryPressBuzzer();
+    }
+
+    // BUG FIX: Lógica del buzzer en un solo lugar (antes estaba duplicada en Update y HandleStateChanged)
+    private void TryPressBuzzer()
+    {
+        if (GameStateManager.Instance == null ||
+            GameStateManager.Instance.CurrentState != GameStateManager.GameState.WaitingForBuzzer) return;
+
+        var myData = GetComponent<PlayerNetworkData>();
+        if (myData == null) return;
+
+        // Contar jugadores en mi equipo
+        int jugadoresEnMiEquipo = 0;
+        foreach (var pRef in Runner.ActivePlayers)
+        {
+            var d = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>();
+            if (d != null && d.TeamIndex == myData.TeamIndex) jugadoresEnMiEquipo++;
+        }
+        if (jugadoresEnMiEquipo == 0) jugadoresEnMiEquipo = 1;
+
+        int turnoActual = (GameStateManager.Instance.CurrentRound - 1) % jugadoresEnMiEquipo;
+
+        // Solo el jugador cuyo turno es puede tocar el buzzer
+        if (myData.SeatIndex == turnoActual)
+            GameStateManager.Instance.RPC_PressBuzzer(Runner.LocalPlayer.PlayerId);
     }
 }
