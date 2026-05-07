@@ -117,7 +117,7 @@ public class UIGameController : MonoBehaviour
 
     private void HandleTurnChanged(PlayerRef nuevoJugadorActivo)
     {
-        ActualizarControlInput();
+        StartCoroutine(ActualizarInputConReintentoCoroutine());
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -362,7 +362,7 @@ public class UIGameController : MonoBehaviour
             case GameStateManager.GameState.Playing:
             case GameStateManager.GameState.Stealing:
                 isCounting = false;
-                ActualizarControlInput();
+                StartCoroutine(ActualizarInputConReintentoCoroutine());
                 break;
 
             case GameStateManager.GameState.WaitingForPlayers:
@@ -388,6 +388,13 @@ public class UIGameController : MonoBehaviour
     //  BUG FIX: ActualizarControlInput sin red de emergencia
     // ══════════════════════════════════════════════════════════════
 
+    private IEnumerator ActualizarInputConReintentoCoroutine()
+    {
+        ActualizarControlInput();
+        yield return null;
+        ActualizarControlInput();
+    }
+
     private void ActualizarControlInput()
     {
         if (GameStateManager.Instance == null || GameStateManager.Instance.Runner == null ||
@@ -412,16 +419,16 @@ public class UIGameController : MonoBehaviour
             if (TurnManager.Instance != null && TurnManager.Instance.ActivePlayer != PlayerRef.None)
             {
                 // Solo el jugador con turno asignado por TurnManager puede responder
-                esMiTurno = (TurnManager.Instance.ActivePlayer == myPlayer);
+                esMiTurno = TurnManager.Instance.IsLocalPlayersTurn;
                 var dataActive = GetPlayerData(TurnManager.Instance.ActivePlayer);
                 if (dataActive != null) nombreTurno = dataActive.PlayerName.ToString();
             }
             else
             {
-                // BUG FIX: TurnManager aún no tiene jugador — nadie responde todavía
-                // Eliminamos la red de emergencia que activaba el input para todo el equipo
-                esMiTurno = false;
-                nombreTurno = "Calculando turno...";
+                // TurnManager sin jugador asignado — BuzzerWinnerId como fallback
+                esMiTurno = (GameStateManager.Instance.BuzzerWinnerId == myPlayer.PlayerId);
+                var dataWinner = GetPlayerData(PlayerRef.FromIndex(GameStateManager.Instance.BuzzerWinnerId));
+                if (dataWinner != null) nombreTurno = dataWinner.PlayerName.ToString();
             }
         }
 
@@ -475,12 +482,41 @@ public class UIGameController : MonoBehaviour
                     OnSubmitAnswer(inputRespuesta.text);
             }
 
-            // BUG FIX: Solo mantener foco si ES nuestro turno
-            // Antes reactivaba el input para cualquier jugador aunque no fuera su turno
             if (!inputRespuesta.isFocused && !isPaused && _esMiTurnoActual)
             {
                 inputRespuesta.ActivateInputField();
             }
+        }
+
+        // Polling de seguridad: si el estado de red dice que es nuestro turno
+        // pero el evento no llegó a tiempo, lo detectamos aquí frame a frame.
+        if (!_esMiTurnoActual && !isPaused &&
+            GameStateManager.Instance != null &&
+            GameStateManager.Instance.Object != null &&
+            GameStateManager.Instance.Object.IsValid &&
+            !GameStateManager.Instance.IsEvaluating)
+        {
+            var st = GameStateManager.Instance.CurrentState;
+            bool deberiaSerMiTurno = false;
+
+            if (st == GameStateManager.GameState.TypingAnswer &&
+                GameStateManager.Instance.Runner != null)
+            {
+                deberiaSerMiTurno = GameStateManager.Instance.BuzzerWinnerId ==
+                                    GameStateManager.Instance.Runner.LocalPlayer.PlayerId;
+            }
+            else if ((st == GameStateManager.GameState.Playing ||
+                      st == GameStateManager.GameState.Stealing) &&
+                     GameStateManager.Instance.Runner != null)
+            {
+                if (TurnManager.Instance != null && TurnManager.Instance.ActivePlayer != PlayerRef.None)
+                    deberiaSerMiTurno = TurnManager.Instance.IsLocalPlayersTurn;
+                else
+                    deberiaSerMiTurno = GameStateManager.Instance.BuzzerWinnerId ==
+                                        GameStateManager.Instance.Runner.LocalPlayer.PlayerId;
+            }
+
+            if (deberiaSerMiTurno) ActualizarControlInput();
         }
 
         if (isCounting && panelCountdown != null)

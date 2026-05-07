@@ -74,6 +74,12 @@ public class TurnManager : NetworkBehaviour
         }
     }
 
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_AdvanceTurnInTeam(string team)
+    {
+        AdvanceTurnInTeam(team);
+    }
+
     public void AdvanceTurnInTeam(string team)
     {
         if (!Object.HasStateAuthority) return;
