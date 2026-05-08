@@ -34,6 +34,9 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public NetworkRunner Runner { get; private set; }
 
+    private NetworkSceneManagerDefault _sceneManager;
+    private bool _isConnecting = false;
+
     private void Awake()
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
@@ -97,34 +100,52 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
 
     private async Task StartFusionGame(GameMode mode, string roomCode)
     {
-        if (Runner != null) { await Runner.Shutdown(); Runner = null; }
+        if (_isConnecting) return;
+        _isConnecting = true;
+
+        // Limpiar runner anterior si existe
+        if (Runner != null)
+        {
+            await Runner.Shutdown();
+            if (Runner != null) Destroy(Runner);
+            Runner = null;
+        }
+
+        // Limpiar scene manager anterior para evitar duplicados
+        if (_sceneManager != null)
+        {
+            Destroy(_sceneManager);
+            _sceneManager = null;
+        }
 
         Runner = gameObject.AddComponent<NetworkRunner>();
         Runner.ProvideInput = true;
         Runner.AddCallbacks(this);
 
+        _sceneManager = gameObject.AddComponent<NetworkSceneManagerDefault>();
+
         var sceneRef = SceneRef.FromIndex(SceneManager.GetActiveScene().buildIndex);
         var sceneInfo = new NetworkSceneInfo();
-        if (sceneRef.IsValid) sceneInfo.AddSceneRef(sceneRef, LoadSceneMode.Additive); 
+        if (sceneRef.IsValid) sceneInfo.AddSceneRef(sceneRef, LoadSceneMode.Additive);
 
         var result = await Runner.StartGame(new StartGameArgs
         {
             GameMode     = mode,
             SessionName  = roomCode,
             PlayerCount  = MAX_PLAYERS,
-            SceneManager = gameObject.AddComponent<NetworkSceneManagerDefault>(),
-            Scene        = sceneInfo 
+            SceneManager = _sceneManager,
+            Scene        = sceneInfo
         });
+
+        _isConnecting = false;
 
         if (result.Ok)
         {
-            // ¡AQUÍ ESTABA EL PEOR ERROR! Borré el cambio de paneles en mi código anterior.
-            // Esto es lo que hace que cambie la pantalla visualmente.
             SetStatus(mode == GameMode.Host ? $"Sala creada: {roomCode}" : $"Unido a sala: {roomCode}");
             lobbyPanel.SetActive(false);
             roomPanel.SetActive(true);
             UpdatePlayerCountUI();
-            
+
             if (TeamAssigner.Instance != null) TeamAssigner.Instance.AssignTeam(Runner.LocalPlayer);
         }
         else

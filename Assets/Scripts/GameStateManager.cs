@@ -302,17 +302,8 @@ public class GameStateManager : NetworkBehaviour
         // ==========================================
         else if (CurrentState == GameState.Playing)
         {
-            // ¡LA CLAVE! Leemos el turno real del TurnManager
-            bool esTurnoValido = false;
-            if (TurnManager.Instance != null && TurnManager.Instance.ActivePlayer.PlayerId == playerId) 
-            {
-                esTurnoValido = true;
-            }
-            // Respaldo de seguridad para 1v1
-            else if (BuzzerWinnerId == playerId) 
-            {
-                esTurnoValido = true;
-            }
+            bool esTurnoValido = TurnManager.Instance != null &&
+                                 TurnManager.Instance.ActivePlayer.PlayerId == playerId;
 
             if (esTurnoValido)
             {
@@ -345,9 +336,8 @@ public class GameStateManager : NetworkBehaviour
         // ==========================================
         else if (CurrentState == GameState.Stealing)
         {
-            bool esTurnoValido = false;
-            if (TurnManager.Instance != null && TurnManager.Instance.ActivePlayer.PlayerId == playerId) esTurnoValido = true;
-            else if (BuzzerWinnerId == playerId) esTurnoValido = true;
+            bool esTurnoValido = TurnManager.Instance != null &&
+                                 TurnManager.Instance.ActivePlayer.PlayerId == playerId;
 
             if (esTurnoValido)
             {
