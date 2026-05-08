@@ -66,6 +66,12 @@ public class UIGameController : MonoBehaviour
     [SerializeField] private TMP_Text textoStrikeGrande;
     [SerializeField] private GameObject[] iconosX = new GameObject[3];
 
+    [Header("Animador IA")]
+    [SerializeField] private GameObject panelAnimador;
+    [SerializeField] private TMP_Text   textoAnimador;
+    [SerializeField] private GameObject btnGenerarPreguntas;
+    [SerializeField] private TMP_Text   textoEstadoGeneracion;
+
     private float localTimer = 0f;
     private bool isCounting = false;
     private bool isPaused = false;
@@ -97,22 +103,56 @@ public class UIGameController : MonoBehaviour
 
     private void OnEnable()
     {
-        GameStateManager.OnStateChangedEvent += HandleStateChanged;
-        GameStateManager.OnErrorAddedEvent += HandleErrorAdded;
-        GameStateManager.OnTemporaryStrikeEvent += HandleTemporaryStrike;
+        GameStateManager.OnStateChangedEvent       += HandleStateChanged;
+        GameStateManager.OnErrorAddedEvent         += HandleErrorAdded;
+        GameStateManager.OnTemporaryStrikeEvent    += HandleTemporaryStrike;
         GameStateManager.OnEvaluationStateChangedEvent += HandleEvaluationStateChanged;
-        GameStateManager.OnTeamNamesUpdatedEvent += RefreshRoomUI;
-        TurnManager.OnTurnChangedEvent += HandleTurnChanged;
+        GameStateManager.OnTeamNamesUpdatedEvent   += RefreshRoomUI;
+        TurnManager.OnTurnChangedEvent             += HandleTurnChanged;
+        AnimadorIA.OnMensajeChanged                += MostrarBurbujaAnimador;
+        AnimadorIA.OnGenerandoPreguntas            += HandleGenerandoPreguntas;
     }
 
     private void OnDisable()
     {
-        GameStateManager.OnStateChangedEvent -= HandleStateChanged;
-        GameStateManager.OnErrorAddedEvent -= HandleErrorAdded;
-        GameStateManager.OnTemporaryStrikeEvent -= HandleTemporaryStrike;
+        GameStateManager.OnStateChangedEvent       -= HandleStateChanged;
+        GameStateManager.OnErrorAddedEvent         -= HandleErrorAdded;
+        GameStateManager.OnTemporaryStrikeEvent    -= HandleTemporaryStrike;
         GameStateManager.OnEvaluationStateChangedEvent -= HandleEvaluationStateChanged;
-        GameStateManager.OnTeamNamesUpdatedEvent -= RefreshRoomUI;
-        TurnManager.OnTurnChangedEvent -= HandleTurnChanged;
+        GameStateManager.OnTeamNamesUpdatedEvent   -= RefreshRoomUI;
+        TurnManager.OnTurnChangedEvent             -= HandleTurnChanged;
+        AnimadorIA.OnMensajeChanged                -= MostrarBurbujaAnimador;
+        AnimadorIA.OnGenerandoPreguntas            -= HandleGenerandoPreguntas;
+    }
+
+    // ─── Animador IA ─────────────────────────────────────────────────
+
+    public void Btn_GenerarPreguntas()
+    {
+        if (AnimadorIA.Instance != null) AnimadorIA.Instance.GenerarPreguntas();
+    }
+
+    private void MostrarBurbujaAnimador(string mensaje)
+    {
+        if (panelAnimador == null || textoAnimador == null) return;
+        StopCoroutine(nameof(OcultarBurbujaCoroutine));
+        textoAnimador.text = mensaje;
+        panelAnimador.SetActive(true);
+        StartCoroutine(nameof(OcultarBurbujaCoroutine));
+    }
+
+    private IEnumerator OcultarBurbujaCoroutine()
+    {
+        yield return new WaitForSeconds(6f);
+        if (panelAnimador != null) panelAnimador.SetActive(false);
+    }
+
+    private void HandleGenerandoPreguntas(bool generando)
+    {
+        if (btnGenerarPreguntas != null)    btnGenerarPreguntas.SetActive(!generando);
+        if (textoEstadoGeneracion != null)  textoEstadoGeneracion.gameObject.SetActive(generando);
+        if (generando && textoEstadoGeneracion != null)
+            textoEstadoGeneracion.text = "Generando preguntas con IA...";
     }
 
     private void HandleTurnChanged(PlayerRef nuevoJugadorActivo)

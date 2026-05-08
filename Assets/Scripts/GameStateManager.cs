@@ -27,9 +27,14 @@ public class GameStateManager : NetworkBehaviour
     [SerializeField] private PreguntaData[] bancoDePreguntas;
     [Networked] public int CurrentQuestionIndex { get; set; }
 
-    public string PreguntaActual => (bancoDePreguntas != null && bancoDePreguntas.Length > 0) ? bancoDePreguntas[CurrentQuestionIndex].Pregunta : "Sin pregunta configurada";
-    public string[] RespuestasValidas => (bancoDePreguntas != null && bancoDePreguntas.Length > 0) ? bancoDePreguntas[CurrentQuestionIndex].Respuestas : new string[0];
-    public int[] PuntosRespuestas => (bancoDePreguntas != null && bancoDePreguntas.Length > 0) ? bancoDePreguntas[CurrentQuestionIndex].Puntos : new int[0];
+    // Preguntas generadas por IA — cuando están presentes, reemplazan el banco estático
+    private PreguntaData[] _preguntasDinamicas;
+    private PreguntaData[] BancoActivo => (_preguntasDinamicas != null && _preguntasDinamicas.Length > 0)
+        ? _preguntasDinamicas : bancoDePreguntas;
+
+    public string PreguntaActual    => (BancoActivo != null && BancoActivo.Length > 0) ? BancoActivo[CurrentQuestionIndex].Pregunta   : "Sin pregunta configurada";
+    public string[] RespuestasValidas => (BancoActivo != null && BancoActivo.Length > 0) ? BancoActivo[CurrentQuestionIndex].Respuestas : new string[0];
+    public int[] PuntosRespuestas   => (BancoActivo != null && BancoActivo.Length > 0) ? BancoActivo[CurrentQuestionIndex].Puntos     : new int[0];
 
     [Networked] public NetworkBool IsGameStarted { get; set; }
     [Networked] public GameState CurrentState { get; private set; } = GameState.WaitingForPlayers;
@@ -107,7 +112,7 @@ public class GameStateManager : NetworkBehaviour
 
             if (CurrentState == GameState.RoundEnd && Timer.Expired(Runner))
             {
-                CurrentQuestionIndex = (CurrentQuestionIndex + 1) % (bancoDePreguntas != null && bancoDePreguntas.Length > 0 ? bancoDePreguntas.Length : 1);
+                CurrentQuestionIndex = (CurrentQuestionIndex + 1) % (BancoActivo != null && BancoActivo.Length > 0 ? BancoActivo.Length : 1);
                 
                 CurrentState = GameState.Countdown;
                 Timer = TickTimer.CreateFromSeconds(Runner, 5.0f); 
@@ -147,6 +152,70 @@ public class GameStateManager : NetworkBehaviour
         }
     }
     
+    // ─── Preguntas dinámicas (IA) ──────────────────────────────────
+
+    // El host llama esto con las preguntas generadas por Ollama.
+    // Se serializa cada pregunta como JSON y se envía via RPC a todos los clientes.
+    public void RPC_CargarPreguntasDinamicas(PreguntaData[] preguntas)
+    {
+        if (!Object.HasStateAuthority) return;
+
+        // Resetear banco en todos los clientes
+        RPC_LimpiarPreguntasDinamicas(preguntas.Length);
+
+        for (int i = 0; i < preguntas.Length; i++)
+        {
+            var p = preguntas[i];
+            string respuestasJson = "[\"" + string.Join("\",\"", p.Respuestas) + "\"]";
+            string puntosJson     = "[" + string.Join(",", p.Puntos) + "]";
+            RPC_AgregarPreguntaDinamica(i, p.Pregunta, respuestasJson, puntosJson);
+        }
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_LimpiarPreguntasDinamicas(int cantidad)
+    {
+        _preguntasDinamicas = new PreguntaData[cantidad];
+        CurrentQuestionIndex = 0;
+        Debug.Log($"[GSM] Banco dinámico preparado para {cantidad} preguntas.");
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_AgregarPreguntaDinamica(int indice, string pregunta, string respuestasJson, string puntosJson)
+    {
+        if (_preguntasDinamicas == null || indice >= _preguntasDinamicas.Length) return;
+
+        _preguntasDinamicas[indice] = new PreguntaData
+        {
+            Pregunta   = pregunta,
+            Respuestas = ParseStringArray(respuestasJson),
+            Puntos     = ParseIntArray(puntosJson)
+        };
+        Debug.Log($"[GSM] Pregunta {indice} cargada: {pregunta}");
+    }
+
+    private static string[] ParseStringArray(string json)
+    {
+        json = json.Trim().TrimStart('[').TrimEnd(']');
+        var parts = json.Split(',');
+        var result = new string[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+            result[i] = parts[i].Trim().Trim('"');
+        return result;
+    }
+
+    private static int[] ParseIntArray(string json)
+    {
+        json = json.Trim().TrimStart('[').TrimEnd(']');
+        var parts = json.Split(',');
+        var result = new int[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+            if (int.TryParse(parts[i].Trim(), out int v)) result[i] = v;
+        return result;
+    }
+
+    // ──────────────────────────────────────────────────────────────
+
     public void StartGame()
     {
         if (!Object.HasStateAuthority) return;
