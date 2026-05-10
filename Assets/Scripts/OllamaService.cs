@@ -212,6 +212,8 @@ public class OllamaService : MonoBehaviour
         if (respuestas.Count > 5) respuestas = respuestas.GetRange(0, 5);
         if (puntos.Length < 5) puntos = new[] { 40, 25, 20, 10, 5 };
 
+        string[] sinonimos = GenerarSinonimos(respuestas.ToArray());
+
         Debug.Log($"[OllamaService] OK — {pregunta} | {string.Join(" / ", respuestas)}");
 
         return new PreguntaData
@@ -219,8 +221,129 @@ public class OllamaService : MonoBehaviour
             Pregunta   = pregunta,
             Respuestas = respuestas.ToArray(),
             Puntos     = puntos,
-            Sinonimos  = new string[0]
+            Sinonimos  = sinonimos
         };
+    }
+
+    // ─── Sinónimos automáticos ─────────────────────────────────────
+    // Para cada respuesta, busca en el diccionario y agrega cada palabra
+    // de respuestas multi-palabra como sinónimo adicional.
+
+    private static readonly Dictionary<string, string> _sinoDict =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        // Lenguajes
+        {"JavaScript",          "JS|java script"},
+        {"Python",              "py|python3"},
+        {"Java",                "jdk|java se"},
+        {"C++",                 "cplusplus|cpp|c plus plus"},
+        {"C#",                  "csharp|c sharp"},
+        {"C",                   "lenguaje c|ansi c"},
+        {"PHP",                 "php7|php8"},
+        {"Ruby",                "rb|ruby on rails"},
+        {"Swift",               "swift ios"},
+        {"Kotlin",              "kotlin android"},
+        {"Go",                  "golang"},
+        {"Rust",                "rustlang"},
+        {"TypeScript",          "TS|type script"},
+        {"Scala",               "scala jvm"},
+        {"R",                   "lenguaje r|r studio"},
+        {"MATLAB",              "matlab simulink"},
+        // Web / protocolos
+        {"HTML",                "html5|hypertext markup"},
+        {"CSS",                 "css3|estilos|cascading"},
+        {"SQL",                 "sequel|structured query"},
+        {"NoSQL",               "no sql"},
+        {"REST",                "restful|rest api"},
+        {"HTTP",                "hypertext transfer|http1"},
+        {"HTTPS",               "http seguro|http ssl|tls"},
+        {"TCP",                 "tcp ip|transmission control"},
+        {"UDP",                 "user datagram"},
+        {"IP",                  "internet protocol"},
+        {"DNS",                 "domain name system"},
+        {"URL",                 "enlace|link|direccion web|uri"},
+        {"API",                 "interfaz|application programming interface"},
+        // Bases de datos
+        {"MySQL",               "my sql"},
+        {"PostgreSQL",          "postgres"},
+        {"MongoDB",             "mongo"},
+        {"SQLite",              "sqlite db"},
+        {"Redis",               "redis cache"},
+        {"Base de datos",       "BD|DB|database|BBDD|bbdd"},
+        // Sistemas operativos
+        {"Linux",               "gnu linux|unix|tux"},
+        {"Windows",             "microsoft windows|win"},
+        {"macOS",               "mac os|osx|apple os"},
+        {"Android",             "android os"},
+        {"iOS",                 "iphone os|apple mobile"},
+        {"Sistema Operativo",   "SO|OS|operating system"},
+        // Estructuras de datos
+        {"Array",               "arreglo|vector|lista indexada"},
+        {"Lista",               "list|linked list|lista enlazada"},
+        {"Pila",                "stack|lifo"},
+        {"Cola",                "queue|fifo"},
+        {"Arbol",               "tree|arbol binario|arbol avl"},
+        {"Grafo",               "graph|red nodos"},
+        {"Hash",                "hashmap|tabla hash|diccionario"},
+        {"Heap",                "monticulo|priority queue"},
+        // Conceptos
+        {"Recursion",           "recursividad|recursivo"},
+        {"POO",                 "programacion orientada objetos|OOP|orientado objetos"},
+        {"OOP",                 "POO|orientado objetos|programacion objetos"},
+        {"Algoritmo",           "algorithm|procedimiento"},
+        {"Compilador",          "compiler|compilar"},
+        {"Interprete",          "interpreter"},
+        {"Framework",           "marco trabajo"},
+        {"Libreria",            "library|lib|biblioteca"},
+        {"Variable",            "var"},
+        {"Funcion",             "function|metodo|method"},
+        {"Clase",               "class|objeto"},
+        {"Interfaz",            "interface|contrato"},
+        {"Herencia",            "inheritance|extends"},
+        {"Polimorfismo",        "polymorphism"},
+        {"Encapsulamiento",     "encapsulation|encapsulacion"},
+        // Hardware / infra
+        {"RAM",                 "memoria ram|memoria volatil"},
+        {"CPU",                 "procesador|unidad procesamiento"},
+        {"GPU",                 "tarjeta grafica|procesador grafico"},
+        {"SSD",                 "disco solido|solid state drive"},
+        {"HDD",                 "disco duro|hard drive"},
+        // DevOps / cloud
+        {"Git",                 "github|gitlab|control versiones|vcs"},
+        {"Docker",              "contenedor|container"},
+        {"Kubernetes",          "k8s|kube"},
+        {"AWS",                 "amazon web services|amazon cloud"},
+        {"Azure",               "microsoft azure"},
+        {"GCP",                 "google cloud|google cloud platform"},
+        // Seguridad / redes
+        {"Firewall",            "cortafuegos|muro fuego"},
+        {"Cifrado",             "encriptacion|encryption|cifrar"},
+        {"Red",                 "network|red computadores"},
+        {"Servidor",            "server|host"},
+        {"Cliente",             "client|browser"},
+    };
+
+    private static string[] GenerarSinonimos(string[] respuestas)
+    {
+        var resultado = new string[respuestas.Length];
+        for (int i = 0; i < respuestas.Length; i++)
+        {
+            string resp = respuestas[i];
+            _sinoDict.TryGetValue(resp, out string syns);
+            syns = syns ?? "";
+
+            // Agregar cada palabra de respuestas multi-palabra (>2 letras) como sinónimo
+            var palabras = resp.Split(' ');
+            if (palabras.Length > 1)
+            {
+                foreach (var p in palabras)
+                    if (p.Length > 2 && !syns.Contains(p))
+                        syns += (syns.Length > 0 ? "|" : "") + p;
+            }
+
+            resultado[i] = syns;
+        }
+        return resultado;
     }
 
     // ─── Clases de serialización HTTP ─────────────────────────────
