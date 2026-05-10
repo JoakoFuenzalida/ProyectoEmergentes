@@ -9,6 +9,8 @@ public struct PreguntaData
     public string Pregunta;
     public string[] Respuestas;
     public int[] Puntos;
+    // Sinónimos por respuesta, separados por coma. Ej: "Git,control de versiones,versionamiento"
+    public string[] Sinonimos;
 }
 
 public class GameStateManager : NetworkBehaviour
@@ -160,7 +162,6 @@ public class GameStateManager : NetworkBehaviour
     {
         if (!Object.HasStateAuthority) return;
 
-        // Resetear banco en todos los clientes
         RPC_LimpiarPreguntasDinamicas(preguntas.Length);
 
         for (int i = 0; i < preguntas.Length; i++)
@@ -168,7 +169,11 @@ public class GameStateManager : NetworkBehaviour
             var p = preguntas[i];
             string respuestasJson = "[\"" + string.Join("\",\"", p.Respuestas) + "\"]";
             string puntosJson     = "[" + string.Join(",", p.Puntos) + "]";
-            RPC_AgregarPreguntaDinamica(i, p.Pregunta, respuestasJson, puntosJson);
+            // Sinónimos: cada elemento es "sin1|sin2|sin3" separado por |
+            string sinonimosJson  = (p.Sinonimos != null && p.Sinonimos.Length > 0)
+                ? "[\"" + string.Join("\",\"", p.Sinonimos) + "\"]"
+                : "[]";
+            RPC_AgregarPreguntaDinamica(i, p.Pregunta, respuestasJson, puntosJson, sinonimosJson);
         }
     }
 
@@ -181,7 +186,9 @@ public class GameStateManager : NetworkBehaviour
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_AgregarPreguntaDinamica(int indice, string pregunta, string respuestasJson, string puntosJson)
+    private void RPC_AgregarPreguntaDinamica(int indice, string pregunta,
+                                              string respuestasJson, string puntosJson,
+                                              string sinonimosJson)
     {
         if (_preguntasDinamicas == null || indice >= _preguntasDinamicas.Length) return;
 
@@ -189,7 +196,8 @@ public class GameStateManager : NetworkBehaviour
         {
             Pregunta   = pregunta,
             Respuestas = ParseStringArray(respuestasJson),
-            Puntos     = ParseIntArray(puntosJson)
+            Puntos     = ParseIntArray(puntosJson),
+            Sinonimos  = sinonimosJson == "[]" ? new string[0] : ParseStringArray(sinonimosJson)
         };
         Debug.Log($"[GSM] Pregunta {indice} cargada: {pregunta}");
     }
@@ -293,33 +301,53 @@ public class GameStateManager : NetworkBehaviour
     public void RPC_SubmitAnswer(string answer, int playerId)
     {
         if (CurrentState == GameState.RoundEnd || CurrentState == GameState.GameOver) return;
-        
-        // Si ya estamos evaluando una respuesta, ignoramos la nueva para evitar spam
-        if (IsEvaluating) return; 
+        if (IsEvaluating) return;
 
-        // Limpiamos la respuesta (esto ya lo tienes, solo asegúrate de que sea robusto)
-        string cleanAnswer = answer.ToUpper().Trim().Replace("Á", "A").Replace("É", "E").Replace("Í", "I").Replace("Ó", "O").Replace("Ú", "U");
-        
-        bool isCorrect = false; 
+        string cleanAnswer = Normalizar(answer);
+
+        bool isCorrect  = false;
         int answerIndex = -1;
 
         for (int i = 0; i < RespuestasValidas.Length; i++)
         {
-            string respuestaDB = RespuestasValidas[i].ToUpper().Trim().Replace("Á", "A").Replace("É", "E").Replace("Í", "I").Replace("Ó", "O").Replace("Ú", "U");
-            if (cleanAnswer.Contains(respuestaDB))
+            if ((RevealedAnswersMask & (1 << i)) != 0) continue; // ya revelada
+
+            // Verificar respuesta principal
+            if (cleanAnswer.Contains(Normalizar(RespuestasValidas[i])))
             {
-                if ((RevealedAnswersMask & (1 << i)) == 0) { isCorrect = true; answerIndex = i; break; }
+                isCorrect = true; answerIndex = i; break;
             }
+
+            // Verificar sinónimos (separados por '|' dentro de cada elemento)
+            var banco = BancoActivo;
+            if (banco != null && CurrentQuestionIndex < banco.Length &&
+                banco[CurrentQuestionIndex].Sinonimos != null &&
+                i < banco[CurrentQuestionIndex].Sinonimos.Length)
+            {
+                foreach (var sin in banco[CurrentQuestionIndex].Sinonimos[i].Split('|'))
+                {
+                    string cleanSin = Normalizar(sin);
+                    if (!string.IsNullOrEmpty(cleanSin) && cleanAnswer.Contains(cleanSin))
+                    {
+                        isCorrect = true; answerIndex = i; break;
+                    }
+                }
+            }
+
+            if (isCorrect) break;
         }
 
-        PendingIsCorrect = isCorrect; 
-        PendingAnswerIndex = answerIndex; 
-        PendingPlayerId = playerId;
-        
-        IsEvaluating = true; 
-        // Bajamos el tiempo a 1.5s para que el juego se sienta más rápido
-        EvaluationTimer = TickTimer.CreateFromSeconds(Runner, 1.5f);
+        PendingIsCorrect  = isCorrect;
+        PendingAnswerIndex = answerIndex;
+        PendingPlayerId   = playerId;
+        IsEvaluating      = true;
+        EvaluationTimer   = TickTimer.CreateFromSeconds(Runner, 1.5f);
     }
+
+    private static string Normalizar(string s) =>
+        s.ToUpper().Trim()
+         .Replace("Á","A").Replace("É","E").Replace("Í","I").Replace("Ó","O").Replace("Ú","U")
+         .Replace("Ü","U").Replace("Ñ","N");
 
     private void ApplyAnswerResult(bool isCorrect, int answerIndex, int playerId)
     {
@@ -371,8 +399,10 @@ public class GameStateManager : NetworkBehaviour
         // ==========================================
         else if (CurrentState == GameState.Playing)
         {
-            bool esTurnoValido = TurnManager.Instance != null &&
-                                 TurnManager.Instance.ActivePlayer.PlayerId == playerId;
+            bool esTurnoValido = (TurnManager.Instance != null &&
+                                  TurnManager.Instance.ActivePlayer != PlayerRef.None &&
+                                  TurnManager.Instance.ActivePlayer.PlayerId == playerId)
+                                 || BuzzerWinnerId == playerId;
 
             if (esTurnoValido)
             {
@@ -405,8 +435,10 @@ public class GameStateManager : NetworkBehaviour
         // ==========================================
         else if (CurrentState == GameState.Stealing)
         {
-            bool esTurnoValido = TurnManager.Instance != null &&
-                                 TurnManager.Instance.ActivePlayer.PlayerId == playerId;
+            bool esTurnoValido = (TurnManager.Instance != null &&
+                                  TurnManager.Instance.ActivePlayer != PlayerRef.None &&
+                                  TurnManager.Instance.ActivePlayer.PlayerId == playerId)
+                                 || BuzzerWinnerId == playerId;
 
             if (esTurnoValido)
             {

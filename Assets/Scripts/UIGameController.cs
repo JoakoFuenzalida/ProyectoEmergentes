@@ -69,8 +69,7 @@ public class UIGameController : MonoBehaviour
     [Header("Animador IA")]
     [SerializeField] private GameObject panelAnimador;
     [SerializeField] private TMP_Text   textoAnimador;
-    [SerializeField] private GameObject btnGenerarPreguntas;
-    [SerializeField] private TMP_Text   textoEstadoGeneracion;
+    [SerializeField] private TMP_Text   textoEstadoGeneracion; // opcional: muestra "Generando preguntas..."
 
     private float localTimer = 0f;
     private bool isCounting = false;
@@ -127,11 +126,6 @@ public class UIGameController : MonoBehaviour
 
     // ─── Animador IA ─────────────────────────────────────────────────
 
-    public void Btn_GenerarPreguntas()
-    {
-        if (AnimadorIA.Instance != null) AnimadorIA.Instance.GenerarPreguntas();
-    }
-
     private void MostrarBurbujaAnimador(string mensaje)
     {
         if (panelAnimador == null || textoAnimador == null) return;
@@ -149,10 +143,11 @@ public class UIGameController : MonoBehaviour
 
     private void HandleGenerandoPreguntas(bool generando)
     {
-        if (btnGenerarPreguntas != null)    btnGenerarPreguntas.SetActive(!generando);
-        if (textoEstadoGeneracion != null)  textoEstadoGeneracion.gameObject.SetActive(generando);
-        if (generando && textoEstadoGeneracion != null)
-            textoEstadoGeneracion.text = "Generando preguntas con IA...";
+        if (textoEstadoGeneracion != null)
+        {
+            textoEstadoGeneracion.gameObject.SetActive(generando);
+            if (generando) textoEstadoGeneracion.text = "Martín está preparando las preguntas...";
+        }
     }
 
     private void HandleTurnChanged(PlayerRef nuevoJugadorActivo)
@@ -242,7 +237,7 @@ public class UIGameController : MonoBehaviour
         if (textoListaEquipoB != null) textoListaEquipoB.text = teamB;
 
         if (GameStateManager.Instance.Runner.IsServer && btnArrancarPartida != null)
-            btnArrancarPartida.SetActive(todosListos && jugadoresConEquipo >= 2);
+            btnArrancarPartida.SetActive(todosListos && jugadoresConEquipo >= 1); // TODO: >= 2 en producción
     }
 
     public void Btn_AbrirEdicionEquipoA()

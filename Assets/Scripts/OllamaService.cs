@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -18,7 +19,7 @@ public class OllamaService : MonoBehaviour
         Instance = this;
     }
 
-    // ─── Preguntas ────────────────────────────────────────────────
+    // ─── Preguntas: 1 por llamada para evitar JSON truncado ───────
 
     public void GenerarPreguntas(int cantidad,
                                   Action<PreguntaData[]> onComplete,
@@ -31,45 +32,76 @@ public class OllamaService : MonoBehaviour
                                                    Action<PreguntaData[]> onComplete,
                                                    Action<string> onError)
     {
-        string prompt =
-            $"Eres el animador de un programa de TV estilo 100 Latinos Dijeron. " +
-            $"Genera EXACTAMENTE {cantidad} preguntas sobre informatica universitaria " +
-            $"(programacion, redes, sistemas operativos, bases de datos, algoritmos, etc.). " +
-            $"Las respuestas deben ser lo que diran estudiantes universitarios de informatica. " +
-            $"Responde SOLO con JSON valido, sin texto adicional, sin bloques de codigo, " +
-            $"en este formato exacto: " +
-            $"{{\"items\":[{{\"pregunta\":\"...\",\"respuestas\":[\"...\",\"...\",\"...\",\"...\",\"...\"],\"puntos\":[45,25,15,10,5]}}]}} " +
-            $"Los puntos de cada pregunta deben sumar 100. Usa solo caracteres ASCII, sin tildes.";
+        var lista = new List<PreguntaData>();
 
-        yield return EnviarPrompt(prompt, respuesta =>
+        for (int i = 0; i < cantidad; i++)
         {
+            PreguntaData resultado = default;
+            string errorMsg        = null;
+
+            yield return StartCoroutine(CoroutineGenerarUnaPregunta(
+                p => resultado = p,
+                e => errorMsg  = e));
+
+            if (errorMsg != null)
+            {
+                onError?.Invoke($"Pregunta {i+1}: {errorMsg}");
+                yield break;
+            }
+
+            lista.Add(resultado);
+            Debug.Log($"[OllamaService] Pregunta {i+1}/{cantidad} OK: {resultado.Pregunta}");
+        }
+
+        onComplete?.Invoke(lista.ToArray());
+    }
+
+    private IEnumerator CoroutineGenerarUnaPregunta(Action<PreguntaData> onComplete,
+                                                     Action<string> onError)
+    {
+        string prompt =
+            "Generate exactly 1 trivia question about university computer science " +
+            "(programming, algorithms, networks, OS, databases). " +
+            "Respond ONLY with valid JSON, no extra text, no markdown:\n" +
+            "{\"pregunta\":\"Name a programming language\"," +
+            "\"respuestas\":[\"Python\",\"Java\",\"JavaScript\",\"C\",\"C++\"]," +
+            "\"puntos\":[40,25,20,10,5]}\n" +
+            "Rules: exactly 5 respuestas, puntos sum to 100, " +
+            "pregunta and respuestas in Spanish, ASCII only, no accents.";
+
+        bool done = false;
+
+        yield return StartCoroutine(EnviarPrompt(prompt, raw =>
+        {
+            Debug.Log($"[OllamaService] Raw pregunta: {raw}");
             try
             {
-                string json = LimpiarJson(respuesta);
-                var wrapper = JsonUtility.FromJson<PreguntasWrapper>(json);
-                if (wrapper?.items == null || wrapper.items.Length == 0)
-                {
-                    onError?.Invoke("Ollama no devolvio preguntas validas.");
-                    return;
-                }
+                string json = LimpiarJson(raw);
+                var p = JsonUtility.FromJson<PreguntaJson>(json);
 
-                var resultado = new PreguntaData[wrapper.items.Length];
-                for (int i = 0; i < wrapper.items.Length; i++)
+                if (p == null || string.IsNullOrEmpty(p.pregunta) || p.respuestas == null)
                 {
-                    resultado[i] = new PreguntaData
-                    {
-                        Pregunta  = wrapper.items[i].pregunta,
-                        Respuestas = wrapper.items[i].respuestas,
-                        Puntos    = wrapper.items[i].puntos
-                    };
+                    onError?.Invoke($"JSON inválido: {raw.Substring(0, Mathf.Min(120, raw.Length))}");
                 }
-                onComplete?.Invoke(resultado);
+                else
+                {
+                    onComplete?.Invoke(new PreguntaData
+                    {
+                        Pregunta   = p.pregunta,
+                        Respuestas = p.respuestas,
+                        Puntos     = (p.puntos != null && p.puntos.Length > 0)
+                                        ? p.puntos : new[] { 40, 25, 20, 10, 5 },
+                        Sinonimos  = p.sinonimos ?? new string[0]
+                    });
+                }
             }
             catch (Exception e)
             {
-                onError?.Invoke($"Error parseando preguntas: {e.Message}\nRespuesta: {respuesta}");
+                onError?.Invoke($"Parse error: {e.Message} | {raw.Substring(0, Mathf.Min(120, raw.Length))}");
             }
-        }, error => onError?.Invoke(error));
+            done = true;
+        },
+        e => { onError?.Invoke(e); done = true; }));
     }
 
     // ─── Comentarios del animador ─────────────────────────────────
@@ -82,14 +114,30 @@ public class OllamaService : MonoBehaviour
     private IEnumerator CoroutineGenerarComentario(string contexto, Action<string> onComplete)
     {
         string prompt =
-            "Eres Martin Carcamo, el animador chileno de television. " +
-            "Eres carimatico, entretenido, usas expresiones chilenas como 'po', 'cachay', 'ya!', 'brillante'. " +
-            "Responde en UNA sola oracion corta (maximo 12 palabras), sin asteriscos ni formato. " +
-            "Comenta esto: " + contexto;
+            "You are Martin Carcamo, a famous Chilean TV host. " +
+            "Write ONE short enthusiastic phrase (max 8 words) in Spanish for this game moment: " +
+            contexto + ". Only the phrase, no quotes, no asterisks.";
 
-        yield return EnviarPrompt(prompt,
-            r => onComplete?.Invoke(r.Trim().Replace("*", "").Replace("\n", " ")),
-            _ => onComplete?.Invoke("¡Ya po'! ¡Vamos con todo!"));
+        yield return StartCoroutine(EnviarPrompt(prompt, r =>
+        {
+            string c = r.Trim().Replace("*", "").Replace("\"", "").Replace("\n", " ");
+            onComplete?.Invoke((c.Length >= 3 && c.Length <= 80) ? c : FraseFallback(contexto));
+        },
+        _ => onComplete?.Invoke(FraseFallback(contexto))));
+    }
+
+    private static string FraseFallback(string ctx)
+    {
+        if (ctx.Contains("ronda"))   return "¡Nueva ronda! ¡A darle con todo po'!";
+        if (ctx.Contains("robo"))    return "¡El robo! ¿Cachay la respuesta?";
+        if (ctx.Contains("ganador")) return "¡Brillante po'! ¡Asi se juega!";
+        string[] g = {
+            "¡Ya po'! ¡Vamos con todo!",
+            "¡Increible po'! ¡Sigamos!",
+            "¡Asi se hace, campeon!",
+            "¡Que nivel po'! ¡Impresionante!"
+        };
+        return g[UnityEngine.Random.Range(0, g.Length)];
     }
 
     // ─── HTTP helper ──────────────────────────────────────────────
@@ -98,7 +146,7 @@ public class OllamaService : MonoBehaviour
                                      Action<string> onSuccess,
                                      Action<string> onError)
     {
-        var body    = new OllamaRequest { model = modelo, prompt = prompt, stream = false };
+        var body     = new OllamaRequest { model = modelo, prompt = prompt, stream = false };
         var bodyJson = JsonUtility.ToJson(body);
         byte[] bytes = Encoding.UTF8.GetBytes(bodyJson);
 
@@ -112,7 +160,7 @@ public class OllamaService : MonoBehaviour
 
         if (req.result != UnityWebRequest.Result.Success)
         {
-            onError?.Invoke($"Error Ollama: {req.error}");
+            onError?.Invoke($"HTTP {req.responseCode}: {req.error}");
             yield break;
         }
 
@@ -123,7 +171,7 @@ public class OllamaService : MonoBehaviour
         }
         catch (Exception e)
         {
-            onError?.Invoke($"Error parsing Ollama response: {e.Message}");
+            onError?.Invoke($"Response parse error: {e.Message}");
         }
     }
 
@@ -131,7 +179,6 @@ public class OllamaService : MonoBehaviour
 
     private static string LimpiarJson(string raw)
     {
-        // Quitar bloques de código markdown (```json ... ```)
         int start = raw.IndexOf('{');
         int end   = raw.LastIndexOf('}');
         if (start >= 0 && end > start)
@@ -141,28 +188,14 @@ public class OllamaService : MonoBehaviour
 
     // ─── Clases de serialización ──────────────────────────────────
 
-    [Serializable] private class OllamaRequest
-    {
-        public string model;
-        public string prompt;
-        public bool   stream;
-    }
-
-    [Serializable] private class OllamaResponse
-    {
-        public string response;
-        public bool   done;
-    }
+    [Serializable] private class OllamaRequest  { public string model; public string prompt; public bool stream; }
+    [Serializable] private class OllamaResponse { public string response; public bool done; }
 
     [Serializable] private class PreguntaJson
     {
         public string   pregunta;
         public string[] respuestas;
+        public string[] sinonimos;
         public int[]    puntos;
-    }
-
-    [Serializable] private class PreguntasWrapper
-    {
-        public PreguntaJson[] items;
     }
 }

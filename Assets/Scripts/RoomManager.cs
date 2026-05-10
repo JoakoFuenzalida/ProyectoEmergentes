@@ -13,7 +13,7 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
     public static RoomManager Instance { get; private set; }
 
     private const int MAX_PLAYERS = 8;
-    private const int MIN_PLAYERS = 2;
+    private const int MIN_PLAYERS = 1; // TODO: cambiar a 2 para producción
 
     [Header("UI References")]
     [SerializeField] private TMP_InputField roomCodeInput;
@@ -82,6 +82,7 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
     public void OnClickStartGame()
     {
         if (Runner == null || !Runner.IsServer) return;
+
         if (Runner.SessionInfo.PlayerCount >= MIN_PLAYERS)
         {
             if (GameStateManager.Instance != null) GameStateManager.Instance.StartGame();
