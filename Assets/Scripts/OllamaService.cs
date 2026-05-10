@@ -61,13 +61,16 @@ public class OllamaService : MonoBehaviour
                                                      Action<string> onError)
     {
         string prompt =
-            "Output ONLY a JSON object, no markdown, no explanation.\n" +
-            "Schema: {\"pregunta\":\"...\",\"respuestas\":[\"A\",\"B\",\"C\",\"D\",\"E\"],\"puntos\":[40,25,20,10,5]}\n" +
-            "Rules: topic=university computer science, language=Spanish, " +
-            "ASCII only (no accents/tildes/enyes), exactly 5 respuestas, puntos sum=100.\n" +
-            "Example: {\"pregunta\":\"Cual es el lenguaje mas usado en desarrollo web?\"," +
-            "\"respuestas\":[\"JavaScript\",\"Python\",\"Java\",\"PHP\",\"Ruby\"]," +
-            "\"puntos\":[40,25,20,10,5]}";
+            "Genera UNA pregunta estilo 'Que dice la gente' sobre informatica universitaria.\n" +
+            "La pregunta debe ser del tipo: 'Nombre un/una...' o 'Cual es el/la mas...'.\n" +
+            "Las respuestas son las 5 cosas mas comunes que diria la gente.\n\n" +
+            "Responde SOLO con este JSON (sin markdown, sin explicacion):\n" +
+            "{\"pregunta\":\"Nombre un lenguaje de programacion popular\"," +
+            "\"respuestas\":[\"Python\",\"JavaScript\",\"Java\",\"C++\",\"PHP\"]," +
+            "\"puntos\":[40,25,15,12,8]}\n\n" +
+            "Reglas: solo letras ASCII (sin tildes ni enyes), exactamente 5 respuestas, " +
+            "los puntos deben sumar 100, respuestas de 1 a 4 palabras cada una.\n" +
+            "Genera una pregunta DIFERENTE al ejemplo.";
 
         bool done = false;
 
