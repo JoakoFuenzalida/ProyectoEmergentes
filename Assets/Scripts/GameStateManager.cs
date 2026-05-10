@@ -79,13 +79,44 @@ public class GameStateManager : NetworkBehaviour
     {
         if (Instance == null) Instance = this;
         _changes = GetChangeDetector(ChangeDetector.Source.SimulationState);
-        
-        if (Object.HasStateAuthority) 
+
+        if (Object.HasStateAuthority)
         {
             ActiveTeam = TeamAssigner.TEAM_A;
-            NombreEquipoA = "Equipo A"; 
+            NombreEquipoA = "Equipo A";
             NombreEquipoB = "Equipo B";
+
+            // El host genera preguntas IA automáticamente al entrar a la sala
+            StartCoroutine(GenerarPreguntasIA());
         }
+    }
+
+    private System.Collections.IEnumerator GenerarPreguntasIA()
+    {
+        // Esperar un frame para que OllamaService esté listo
+        yield return null;
+
+        if (OllamaService.Instance == null)
+        {
+            Debug.LogWarning("[GSM] OllamaService no encontrado en la escena. Se usarán preguntas hardcodeadas.");
+            yield break;
+        }
+
+        Debug.Log("[GSM] Iniciando generación de preguntas con IA...");
+        AnimadorIA.NotifyGenerating(true);
+
+        OllamaService.Instance.GenerarPreguntas(5,
+            preguntas =>
+            {
+                RPC_CargarPreguntasDinamicas(preguntas);
+                AnimadorIA.NotifyGenerating(false);
+                Debug.Log($"[GSM] {preguntas.Length} preguntas IA cargadas correctamente.");
+            },
+            error =>
+            {
+                AnimadorIA.NotifyGenerating(false);
+                Debug.LogError($"[GSM] Error generando preguntas IA: {error}. Se usarán preguntas hardcodeadas.");
+            });
     }
 
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
@@ -447,12 +478,20 @@ public class GameStateManager : NetworkBehaviour
                     RevealedAnswersMask |= (1 << answerIndex); 
                     AwardPointsToTeam(ActiveTeam.ToString(), RoundScore + PuntosRespuestas[answerIndex]); 
                 }
-                else 
-                { 
-                    RPC_ShowTemporaryStrike(); 
-                    RegisterStealFailed(); 
+                else
+                {
+                    RPC_ShowTemporaryStrike();
+                    RegisterStealFailed();
                 }
             }
         }
+    }
+
+    // ─── Mensajes del Animador IA (sync a todos los clientes) ────────
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_MostrarMensajeAnimador(string mensaje)
+    {
+        AnimadorIA.MostrarMensaje(mensaje);
     }
 }

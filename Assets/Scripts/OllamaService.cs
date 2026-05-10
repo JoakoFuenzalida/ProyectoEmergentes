@@ -182,8 +182,17 @@ public class OllamaService : MonoBehaviour
         int start = raw.IndexOf('{');
         int end   = raw.LastIndexOf('}');
         if (start >= 0 && end > start)
-            return raw.Substring(start, end - start + 1);
-        return raw.Trim();
+            raw = raw.Substring(start, end - start + 1);
+        else
+            raw = raw.Trim();
+
+        // JsonUtility no soporta \uXXXX — convertir a caracteres reales antes de parsear
+        raw = System.Text.RegularExpressions.Regex.Replace(
+            raw,
+            @"\\u([0-9a-fA-F]{4})",
+            m => ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString());
+
+        return raw;
     }
 
     // ─── Clases de serialización ──────────────────────────────────
