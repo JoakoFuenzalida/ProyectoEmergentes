@@ -77,6 +77,9 @@ public class UIGameController : MonoBehaviour
     private CursorLockMode previousLockMode;
     private bool previousCursorVisible;
 
+    // Bloquea el botón arrancar hasta que las preguntas IA estén listas
+    private bool _preguntasListas = false;
+
     // ── BUG FIX: Guardamos si ES nuestro turno para el Update ─────
     private bool _esMiTurnoActual = false;
 
@@ -143,10 +146,25 @@ public class UIGameController : MonoBehaviour
 
     private void HandleGenerandoPreguntas(bool generando)
     {
+        _preguntasListas = !generando;
+
         if (textoEstadoGeneracion != null)
         {
             textoEstadoGeneracion.gameObject.SetActive(generando);
-            if (generando) textoEstadoGeneracion.text = "Martín está preparando las preguntas...";
+            textoEstadoGeneracion.text = generando
+                ? "Martin esta preparando las preguntas... (puede tardar un minuto)"
+                : "";
+        }
+
+        // Ocultar/mostrar botón arrancar según estado de carga
+        if (btnArrancarPartida != null && GameStateManager.Instance != null
+            && GameStateManager.Instance.Runner != null
+            && GameStateManager.Instance.Runner.IsServer)
+        {
+            if (generando)
+                btnArrancarPartida.SetActive(false);
+            else
+                RefreshRoomUI(); // re-evalúa con _preguntasListas = true
         }
     }
 
@@ -237,7 +255,7 @@ public class UIGameController : MonoBehaviour
         if (textoListaEquipoB != null) textoListaEquipoB.text = teamB;
 
         if (GameStateManager.Instance.Runner.IsServer && btnArrancarPartida != null)
-            btnArrancarPartida.SetActive(todosListos && jugadoresConEquipo >= 1); // TODO: >= 2 en producción
+            btnArrancarPartida.SetActive(todosListos && jugadoresConEquipo >= 1 && _preguntasListas); // TODO: jugadoresConEquipo >= 2 en producción
     }
 
     public void Btn_AbrirEdicionEquipoA()

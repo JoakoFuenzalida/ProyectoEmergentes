@@ -148,7 +148,7 @@ public class OllamaService : MonoBehaviour
                                      Action<string> onSuccess,
                                      Action<string> onError)
     {
-        var body     = new OllamaRequest { model = modelo, prompt = prompt, stream = false };
+        var body     = new OllamaRequest { model = modelo, prompt = prompt, stream = false, options = new OllamaOptions() };
         var bodyJson = JsonUtility.ToJson(body);
         byte[] bytes = Encoding.UTF8.GetBytes(bodyJson);
 
@@ -199,7 +199,8 @@ public class OllamaService : MonoBehaviour
 
     // ─── Clases de serialización ──────────────────────────────────
 
-    [Serializable] private class OllamaRequest  { public string model; public string prompt; public bool stream; }
+    [Serializable] private class OllamaOptions  { public int num_predict = 500; }
+    [Serializable] private class OllamaRequest  { public string model; public string prompt; public bool stream; public OllamaOptions options; }
     [Serializable] private class OllamaResponse { public string response; public bool done; }
 
     [Serializable] private class PreguntaJson
