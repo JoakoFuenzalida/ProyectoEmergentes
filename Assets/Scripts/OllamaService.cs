@@ -17,6 +17,7 @@ public class OllamaService : MonoBehaviour
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
+        Debug.Log("[OllamaService] Awake — singleton listo.");
     }
 
     // ─── Preguntas: 1 por llamada para evitar JSON truncado ───────
