@@ -188,18 +188,30 @@ public class OllamaService : MonoBehaviour
         else
             raw = raw.Trim();
 
-        // JsonUtility no soporta \uXXXX — convertir a caracteres reales antes de parsear
+        // 1) Decodificar \uXXXX (JsonUtility no los soporta)
         raw = System.Text.RegularExpressions.Regex.Replace(
             raw,
             @"\\u([0-9a-fA-F]{4})",
             m => ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString());
+
+        // 2) Normalizar caracteres no-ASCII a ASCII equivalente.
+        //    JsonUtility falla con acentos literales en strings JSON (á, é, í, ó, ú, ñ, ¿, ¡)
+        raw = raw
+            .Replace("á","a").Replace("Á","A")
+            .Replace("é","e").Replace("É","E")
+            .Replace("í","i").Replace("Í","I")
+            .Replace("ó","o").Replace("Ó","O")
+            .Replace("ú","u").Replace("Ú","U")
+            .Replace("ü","u").Replace("Ü","U")
+            .Replace("ñ","n").Replace("Ñ","N")
+            .Replace("¿","").Replace("¡","");
 
         return raw;
     }
 
     // ─── Clases de serialización ──────────────────────────────────
 
-    [Serializable] private class OllamaOptions  { public int num_predict = 500; }
+    [Serializable] private class OllamaOptions  { public int num_predict = 1024; }
     [Serializable] private class OllamaRequest  { public string model; public string prompt; public bool stream; public OllamaOptions options; }
     [Serializable] private class OllamaResponse { public string response; public bool done; }
 
