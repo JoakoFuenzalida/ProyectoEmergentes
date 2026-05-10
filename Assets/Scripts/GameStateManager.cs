@@ -80,8 +80,6 @@ public class GameStateManager : NetworkBehaviour
         if (Instance == null) Instance = this;
         _changes = GetChangeDetector(ChangeDetector.Source.SimulationState);
 
-        Debug.Log($"[GSM] Spawned — HasStateAuthority={Object.HasStateAuthority}");
-
         if (Object.HasStateAuthority)
         {
             ActiveTeam = TeamAssigner.TEAM_A;
@@ -95,11 +93,7 @@ public class GameStateManager : NetworkBehaviour
 
     private System.Collections.IEnumerator GenerarPreguntasIA()
     {
-        Debug.Log("[GSM] GenerarPreguntasIA coroutine iniciada.");
-        // Esperar un frame para que OllamaService esté listo
-        yield return null;
-
-        Debug.Log($"[GSM] Buscando OllamaService... Instance={OllamaService.Instance}");
+        yield return null; // esperar un frame para que OllamaService esté listo
 
         if (OllamaService.Instance == null)
         {

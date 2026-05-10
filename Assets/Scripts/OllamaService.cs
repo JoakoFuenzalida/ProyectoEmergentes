@@ -17,7 +17,6 @@ public class OllamaService : MonoBehaviour
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
-        Debug.Log("[OllamaService] Awake — singleton listo.");
     }
 
     // ─── Preguntas: 1 por llamada para evitar JSON truncado ───────
@@ -61,14 +60,16 @@ public class OllamaService : MonoBehaviour
                                                      Action<string> onError)
     {
         string prompt =
-            "Generate exactly 1 trivia question about university computer science " +
-            "(programming, algorithms, networks, OS, databases). " +
-            "Respond ONLY with valid JSON, no extra text, no markdown:\n" +
-            "{\"pregunta\":\"Name a programming language\"," +
-            "\"respuestas\":[\"Python\",\"Java\",\"JavaScript\",\"C\",\"C++\"]," +
-            "\"puntos\":[40,25,20,10,5]}\n" +
-            "Rules: exactly 5 respuestas, puntos sum to 100, " +
-            "pregunta and respuestas in Spanish, ASCII only, no accents.";
+            "Output ONLY a JSON object. No explanation, no markdown, no extra text.\n" +
+            "Format: {\"pregunta\":\"...\",\"respuestas\":[\"A\",\"B\",\"C\",\"D\",\"E\"],\"puntos\":[40,25,20,10,5]}\n" +
+            "Rules:\n" +
+            "- Topic: university computer science (programming, algorithms, networks, OS, databases)\n" +
+            "- Language: Spanish\n" +
+            "- CRITICAL: use ONLY plain ASCII letters. Replace accented letters: a e i o u (never a with accent, e with accent, etc.)\n" +
+            "- Replace: a=a, e=e, i=i, o=o, u=u (drop all diacritics). No tildes, no enyes, no umlauts.\n" +
+            "- Exactly 5 respuestas, puntos must sum to 100\n" +
+            "- Do not repeat a question from previous calls\n" +
+            "Example: {\"pregunta\":\"Cual es el lenguaje de programacion mas usado en desarrollo web?\",\"respuestas\":[\"JavaScript\",\"Python\",\"Java\",\"PHP\",\"Ruby\"],\"puntos\":[40,25,20,10,5]}";
 
         bool done = false;
 
