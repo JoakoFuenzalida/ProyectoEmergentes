@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnityEngine;
 using UnityEngine.Networking;
 
@@ -19,7 +20,7 @@ public class OllamaService : MonoBehaviour
         Instance = this;
     }
 
-    // ─── Preguntas: 1 por llamada para evitar JSON truncado ───────
+    // ─── Preguntas: 1 por llamada ─────────────────────────────────
 
     public void GenerarPreguntas(int cantidad,
                                   Action<PreguntaData[]> onComplete,
@@ -60,46 +61,29 @@ public class OllamaService : MonoBehaviour
                                                      Action<string> onError)
     {
         string prompt =
-            "Output ONLY a JSON object. No explanation, no markdown, no extra text.\n" +
-            "Format: {\"pregunta\":\"...\",\"respuestas\":[\"A\",\"B\",\"C\",\"D\",\"E\"],\"puntos\":[40,25,20,10,5]}\n" +
-            "Rules:\n" +
-            "- Topic: university computer science (programming, algorithms, networks, OS, databases)\n" +
-            "- Language: Spanish\n" +
-            "- CRITICAL: use ONLY plain ASCII letters. Replace accented letters: a e i o u (never a with accent, e with accent, etc.)\n" +
-            "- Replace: a=a, e=e, i=i, o=o, u=u (drop all diacritics). No tildes, no enyes, no umlauts.\n" +
-            "- Exactly 5 respuestas, puntos must sum to 100\n" +
-            "- Do not repeat a question from previous calls\n" +
-            "Example: {\"pregunta\":\"Cual es el lenguaje de programacion mas usado en desarrollo web?\",\"respuestas\":[\"JavaScript\",\"Python\",\"Java\",\"PHP\",\"Ruby\"],\"puntos\":[40,25,20,10,5]}";
+            "Output ONLY a JSON object, no markdown, no explanation.\n" +
+            "Schema: {\"pregunta\":\"...\",\"respuestas\":[\"A\",\"B\",\"C\",\"D\",\"E\"],\"puntos\":[40,25,20,10,5]}\n" +
+            "Rules: topic=university computer science, language=Spanish, " +
+            "ASCII only (no accents/tildes/enyes), exactly 5 respuestas, puntos sum=100.\n" +
+            "Example: {\"pregunta\":\"Cual es el lenguaje mas usado en desarrollo web?\"," +
+            "\"respuestas\":[\"JavaScript\",\"Python\",\"Java\",\"PHP\",\"Ruby\"]," +
+            "\"puntos\":[40,25,20,10,5]}";
 
         bool done = false;
 
         yield return StartCoroutine(EnviarPrompt(prompt, raw =>
         {
-            Debug.Log($"[OllamaService] Raw pregunta: {raw}");
             try
             {
-                string json = LimpiarJson(raw);
-                var p = JsonUtility.FromJson<PreguntaJson>(json);
-
-                if (p == null || string.IsNullOrEmpty(p.pregunta) || p.respuestas == null)
-                {
-                    onError?.Invoke($"JSON inválido: {raw.Substring(0, Mathf.Min(120, raw.Length))}");
-                }
+                var p = ExtraerPregunta(raw);
+                if (p == null)
+                    onError?.Invoke($"No se encontraron campos en: {raw.Substring(0, Mathf.Min(200, raw.Length))}");
                 else
-                {
-                    onComplete?.Invoke(new PreguntaData
-                    {
-                        Pregunta   = p.pregunta,
-                        Respuestas = p.respuestas,
-                        Puntos     = (p.puntos != null && p.puntos.Length > 0)
-                                        ? p.puntos : new[] { 40, 25, 20, 10, 5 },
-                        Sinonimos  = p.sinonimos ?? new string[0]
-                    });
-                }
+                    onComplete?.Invoke(p.Value);
             }
             catch (Exception e)
             {
-                onError?.Invoke($"Parse error: {e.Message} | {raw.Substring(0, Mathf.Min(120, raw.Length))}");
+                onError?.Invoke($"Excepcion extrayendo pregunta: {e.Message}");
             }
             done = true;
         },
@@ -177,49 +161,68 @@ public class OllamaService : MonoBehaviour
         }
     }
 
-    // ─── Limpieza de JSON ─────────────────────────────────────────
+    // ─── Extractor robusto por regex (sin JsonUtility) ────────────
+    // JsonUtility falla con acentos, \uXXXX y otros chars no-ASCII.
+    // Este extractor busca los campos directamente con regex.
 
-    private static string LimpiarJson(string raw)
+    private static PreguntaData? ExtraerPregunta(string raw)
     {
-        int start = raw.IndexOf('{');
-        int end   = raw.LastIndexOf('}');
-        if (start >= 0 && end > start)
-            raw = raw.Substring(start, end - start + 1);
-        else
-            raw = raw.Trim();
-
-        // 1) Decodificar \uXXXX (JsonUtility no los soporta)
-        raw = System.Text.RegularExpressions.Regex.Replace(
-            raw,
-            @"\\u([0-9a-fA-F]{4})",
+        // 1) Decodificar escapes \uXXXX a caracteres reales
+        raw = Regex.Replace(raw, @"\\u([0-9a-fA-F]{4})",
             m => ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString());
 
-        // 2) Normalizar caracteres no-ASCII a ASCII equivalente.
-        //    JsonUtility falla con acentos literales en strings JSON (á, é, í, ó, ú, ñ, ¿, ¡)
-        raw = raw
-            .Replace("á","a").Replace("Á","A")
-            .Replace("é","e").Replace("É","E")
-            .Replace("í","i").Replace("Í","I")
-            .Replace("ó","o").Replace("Ó","O")
-            .Replace("ú","u").Replace("Ú","U")
-            .Replace("ü","u").Replace("Ü","U")
-            .Replace("ñ","n").Replace("Ñ","N")
-            .Replace("¿","").Replace("¡","");
+        // 2) Eliminar saltos de línea/tabs internos y comillas escapadas
+        raw = raw.Replace("\r", " ").Replace("\n", " ").Replace("\t", " ");
+        raw = raw.Replace("\\\"", "'");   // \" → ' para no romper los límites de string
+        raw = raw.Replace("\\\\", "\\");  // \\ → \
 
-        return raw;
+        // 3) Extraer "pregunta":"..."  — toma todo hasta la próxima " no escapada
+        var mP = Regex.Match(raw, @"""pregunta""\s*:\s*""([^""]*)""");
+        if (!mP.Success) return null;
+        string pregunta = mP.Groups[1].Value.Trim();
+        if (string.IsNullOrEmpty(pregunta)) return null;
+
+        // 4) Extraer bloque "respuestas":[...]
+        var mR = Regex.Match(raw, @"""respuestas""\s*:\s*\[([^\]]*)\]");
+        if (!mR.Success) return null;
+
+        // 5) Extraer cada string dentro del bloque
+        var respuestas = new List<string>();
+        foreach (Match m in Regex.Matches(mR.Groups[1].Value, @"""([^""]*)"""))
+            respuestas.Add(m.Groups[1].Value.Trim());
+
+        if (respuestas.Count < 3) return null;
+
+        // 6) Extraer "puntos":[n,n,n,n,n]
+        int[] puntos = new[] { 40, 25, 20, 10, 5 };
+        var mPuntos = Regex.Match(raw, @"""puntos""\s*:\s*\[([0-9,\s]+)\]");
+        if (mPuntos.Success)
+        {
+            var pList = new List<int>();
+            foreach (var token in mPuntos.Groups[1].Value.Split(','))
+                if (int.TryParse(token.Trim(), out int v)) pList.Add(v);
+            if (pList.Count >= 3) puntos = pList.ToArray();
+        }
+
+        // 7) Normalizar a 5 respuestas y 5 puntos
+        while (respuestas.Count < 5) respuestas.Add("Otro");
+        if (respuestas.Count > 5) respuestas = respuestas.GetRange(0, 5);
+        if (puntos.Length < 5) puntos = new[] { 40, 25, 20, 10, 5 };
+
+        Debug.Log($"[OllamaService] OK — {pregunta} | {string.Join(" / ", respuestas)}");
+
+        return new PreguntaData
+        {
+            Pregunta   = pregunta,
+            Respuestas = respuestas.ToArray(),
+            Puntos     = puntos,
+            Sinonimos  = new string[0]
+        };
     }
 
-    // ─── Clases de serialización ──────────────────────────────────
+    // ─── Clases de serialización HTTP ─────────────────────────────
 
     [Serializable] private class OllamaOptions  { public int num_predict = 1024; }
     [Serializable] private class OllamaRequest  { public string model; public string prompt; public bool stream; public OllamaOptions options; }
     [Serializable] private class OllamaResponse { public string response; public bool done; }
-
-    [Serializable] private class PreguntaJson
-    {
-        public string   pregunta;
-        public string[] respuestas;
-        public string[] sinonimos;
-        public int[]    puntos;
-    }
 }
