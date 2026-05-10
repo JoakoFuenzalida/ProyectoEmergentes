@@ -13,7 +13,7 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
     public static RoomManager Instance { get; private set; }
 
     private const int MAX_PLAYERS = 8;
-    private const int MIN_PLAYERS = 1; // TODO: cambiar a 2 para producción
+    private const int MIN_PLAYERS = 2;
 
     [Header("UI References")]
     [SerializeField] private TMP_InputField roomCodeInput;

@@ -255,7 +255,7 @@ public class UIGameController : MonoBehaviour
         if (textoListaEquipoB != null) textoListaEquipoB.text = teamB;
 
         if (GameStateManager.Instance.Runner.IsServer && btnArrancarPartida != null)
-            btnArrancarPartida.SetActive(todosListos && jugadoresConEquipo >= 1 && _preguntasListas); // TODO: jugadoresConEquipo >= 2 en producción
+            btnArrancarPartida.SetActive(todosListos && jugadoresConEquipo >= 2 && _preguntasListas);
     }
 
     public void Btn_AbrirEdicionEquipoA()
