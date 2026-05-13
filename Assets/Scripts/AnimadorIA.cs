@@ -1,52 +1,53 @@
 using System;
+using System.Collections;
 using UnityEngine;
+using Fusion;
 
-// AnimadorIA: MonoBehaviour normal (no necesita Fusion).
-// La generación de preguntas ocurre en GameStateManager.Spawned().
-// Los comentarios y mensajes se envían via RPC_MostrarMensajeAnimador en GameStateManager.
-public class AnimadorIA : MonoBehaviour
+// AnimadorIA como NetworkBehaviour para que los comentarios se sincronicen
+// via propiedad [Networked], garantizando que cualquier cliente los reciba.
+public class AnimadorIA : NetworkBehaviour
 {
     public static AnimadorIA Instance { get; private set; }
+
+    [Networked(OnChanged = nameof(OnMensajeChanged_Fusion))]
+    public NetworkString<_512> MensajeRed { get; set; }
 
     public static event Action<string> OnMensajeChanged;
     public static event Action<bool>   OnGenerandoPreguntas;
 
-    // Llamado desde GameStateManager para notificar el estado de generación
-    public static void NotifyGenerating(bool generando)
-    {
-        OnGenerandoPreguntas?.Invoke(generando);
-    }
+    private bool _generandoComentario = false;
 
-    // Llamado desde GameStateManager.RPC_MostrarMensajeAnimador (se ejecuta en todos los clientes)
-    public static void MostrarMensaje(string mensaje)
+    public override void Spawned()
     {
-        OnMensajeChanged?.Invoke(mensaje);
-    }
-
-    private void Awake()
-    {
-        if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
-    }
-
-    private void OnEnable()
-    {
         GameStateManager.OnStateChangedEvent += HandleStateChanged;
     }
 
-    private void OnDisable()
+    public override void Despawned(NetworkRunner runner, bool hasState)
     {
+        if (Instance == this) Instance = null;
         GameStateManager.OnStateChangedEvent -= HandleStateChanged;
     }
 
-    // ─── Comentarios reactivos ─────────────────────────────────────
+    // Fusion llama esto en TODOS los clientes cuando MensajeRed cambia
+    private static void OnMensajeChanged_Fusion(Changed<AnimadorIA> changed)
+    {
+        string msg = changed.Behaviour.MensajeRed.ToString();
+        if (!string.IsNullOrEmpty(msg))
+            OnMensajeChanged?.Invoke(msg);
+    }
+
+    // ─── API estática usada por GameStateManager ──────────────────
+
+    public static void NotifyGenerating(bool generando)
+        => OnGenerandoPreguntas?.Invoke(generando);
+
+    // ─── Comentarios reactivos (solo host) ────────────────────────
 
     private void HandleStateChanged(GameStateManager.GameState estado)
     {
-        // Solo el host genera y distribuye comentarios
-        if (GameStateManager.Instance == null || !GameStateManager.Instance.Object.HasStateAuthority) return;
-        // No hablar durante el lobby
-        if (!GameStateManager.Instance.IsGameStarted) return;
+        if (!Object.HasStateAuthority) return;
+        if (GameStateManager.Instance == null || !GameStateManager.Instance.IsGameStarted) return;
 
         switch (estado)
         {
@@ -65,8 +66,6 @@ public class AnimadorIA : MonoBehaviour
         }
     }
 
-    private bool _generandoComentario = false;
-
     private void GenerarYMostrar(string contexto)
     {
         if (_generandoComentario || OllamaService.Instance == null) return;
@@ -74,7 +73,12 @@ public class AnimadorIA : MonoBehaviour
 
         OllamaService.Instance.GenerarComentario(contexto, mensaje =>
         {
-            GameStateManager.Instance?.RPC_MostrarMensajeAnimador(mensaje);
+            if (!string.IsNullOrEmpty(mensaje) && Object.HasStateAuthority)
+            {
+                MensajeRed = mensaje.Length > 510
+                    ? mensaje.Substring(0, 510)
+                    : mensaje;
+            }
             _generandoComentario = false;
         });
     }

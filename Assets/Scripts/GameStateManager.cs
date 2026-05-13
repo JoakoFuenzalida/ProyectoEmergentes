@@ -107,9 +107,12 @@ public class GameStateManager : NetworkBehaviour
         OllamaService.Instance.GenerarPreguntas(5,
             preguntas =>
             {
-                RPC_CargarPreguntasDinamicas(preguntas);
+                // Guardar localmente en el host — NO enviamos RPCs aquí porque los
+                // clientes pueden no estar conectados todavía. La sincronización
+                // ocurre en StartGame(), cuando todos ya están en la sala.
+                _preguntasDinamicas = preguntas;
                 AnimadorIA.NotifyGenerating(false);
-                Debug.Log($"[GSM] {preguntas.Length} preguntas IA cargadas correctamente.");
+                Debug.Log($"[GSM] {preguntas.Length} preguntas IA listas (se sincronizarán al arrancar).");
             },
             error =>
             {
@@ -257,15 +260,20 @@ public class GameStateManager : NetworkBehaviour
     public void StartGame()
     {
         if (!Object.HasStateAuthority) return;
-        IsGameStarted = true; 
+
+        // Sincronizar preguntas IA a todos los clientes ahora que están conectados
+        if (_preguntasDinamicas != null && _preguntasDinamicas.Length > 0)
+            RPC_CargarPreguntasDinamicas(_preguntasDinamicas);
+
+        IsGameStarted = true;
         CurrentState = GameState.Countdown;
         Timer = TickTimer.CreateFromSeconds(Runner, 5.0f);
-        BuzzerWinnerId = -1; 
-        RevealedAnswersMask = 0; 
-        FaceOffChanceUsed = false; 
+        BuzzerWinnerId = -1;
+        RevealedAnswersMask = 0;
+        FaceOffChanceUsed = false;
         IsEvaluating = false;
         ErrorCount = 0; RoundScore = 0; ScoreA = 0; ScoreB = 0; CurrentRound = 1;
-        CurrentQuestionIndex = 0; 
+        CurrentQuestionIndex = 0;
     }
 
     public void RegisterCorrectAnswer(int points)
@@ -486,11 +494,4 @@ public class GameStateManager : NetworkBehaviour
         }
     }
 
-    // ─── Mensajes del Animador IA (sync a todos los clientes) ────────
-
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_MostrarMensajeAnimador(string mensaje)
-    {
-        AnimadorIA.MostrarMensaje(mensaje);
-    }
 }
