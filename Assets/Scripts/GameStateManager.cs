@@ -62,6 +62,17 @@ public class GameStateManager : NetworkBehaviour
     [Networked] public int PendingAnswerIndex { get; set; }
     [Networked] public int PendingPlayerId { get; set; }
 
+    // Mensaje del animador — sincronizado automáticamente a todos los clientes
+    [Networked(OnChanged = nameof(OnMensajeAnimadorChanged))]
+    public NetworkString<_512> MensajeAnimador { get; set; }
+
+    private static void OnMensajeAnimadorChanged(Changed<GameStateManager> changed)
+    {
+        string msg = changed.Behaviour.MensajeAnimador.ToString();
+        if (!string.IsNullOrEmpty(msg))
+            AnimadorIA.NotifyMensaje(msg);
+    }
+
     public static event Action<GameState> OnStateChangedEvent;
     public static event Action<string, int> OnScoreUpdatedEvent;
     public static event Action<int> OnErrorAddedEvent;

@@ -1,68 +1,46 @@
 using System;
-using System.Collections;
 using UnityEngine;
-using Fusion;
 
-// AnimadorIA como NetworkBehaviour para que los comentarios se sincronicen
-// via propiedad [Networked], garantizando que cualquier cliente los reciba.
-public class AnimadorIA : NetworkBehaviour
+// AnimadorIA: MonoBehaviour simple.
+// El mensaje se sincroniza via GameStateManager.MensajeAnimador ([Networked]),
+// que Fusion entrega automáticamente a todos los clientes.
+public class AnimadorIA : MonoBehaviour
 {
     public static AnimadorIA Instance { get; private set; }
-
-    [Networked(OnChanged = nameof(OnMensajeChanged_Fusion))]
-    public NetworkString<_512> MensajeRed { get; set; }
 
     public static event Action<string> OnMensajeChanged;
     public static event Action<bool>   OnGenerandoPreguntas;
 
     private bool _generandoComentario = false;
 
-    public override void Spawned()
+    private void Awake()
     {
+        if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
-        GameStateManager.OnStateChangedEvent += HandleStateChanged;
     }
 
-    public override void Despawned(NetworkRunner runner, bool hasState)
-    {
-        if (Instance == this) Instance = null;
-        GameStateManager.OnStateChangedEvent -= HandleStateChanged;
-    }
+    private void OnEnable()  => GameStateManager.OnStateChangedEvent += HandleStateChanged;
+    private void OnDisable() => GameStateManager.OnStateChangedEvent -= HandleStateChanged;
 
-    // Fusion llama esto en TODOS los clientes cuando MensajeRed cambia
-    private static void OnMensajeChanged_Fusion(Changed<AnimadorIA> changed)
-    {
-        string msg = changed.Behaviour.MensajeRed.ToString();
-        if (!string.IsNullOrEmpty(msg))
-            OnMensajeChanged?.Invoke(msg);
-    }
+    // Llamado por GameStateManager.OnMensajeAnimadorChanged en TODOS los clientes
+    public static void NotifyMensaje(string mensaje) => OnMensajeChanged?.Invoke(mensaje);
 
-    // ─── API estática usada por GameStateManager ──────────────────
-
-    public static void NotifyGenerating(bool generando)
-        => OnGenerandoPreguntas?.Invoke(generando);
+    // Llamado por GameStateManager cuando inicia/termina la generación de preguntas
+    public static void NotifyGenerating(bool generando) => OnGenerandoPreguntas?.Invoke(generando);
 
     // ─── Comentarios reactivos (solo host) ────────────────────────
 
     private void HandleStateChanged(GameStateManager.GameState estado)
     {
-        if (!Object.HasStateAuthority) return;
-        if (GameStateManager.Instance == null || !GameStateManager.Instance.IsGameStarted) return;
+        if (GameStateManager.Instance == null || !GameStateManager.Instance.Object.HasStateAuthority) return;
+        if (!GameStateManager.Instance.IsGameStarted) return;
 
         switch (estado)
         {
-            case GameStateManager.GameState.Countdown:
-                GenerarYMostrar("nueva ronda comenzando");
-                break;
-            case GameStateManager.GameState.RoundEnd:
-                GenerarYMostrar("ronda terminada");
-                break;
-            case GameStateManager.GameState.Stealing:
-                GenerarYMostrar("robo de puntos");
-                break;
-            case GameStateManager.GameState.GameOver:
-                GenerarYMostrar("ganador del juego");
-                break;
+            case GameStateManager.GameState.Countdown:  GenerarYMostrar("nueva ronda comenzando"); break;
+            case GameStateManager.GameState.RoundEnd:   GenerarYMostrar("ronda terminada");        break;
+            case GameStateManager.GameState.Stealing:   GenerarYMostrar("robo de puntos");         break;
+            case GameStateManager.GameState.GameOver:   GenerarYMostrar("ganador del juego");      break;
         }
     }
 
@@ -73,9 +51,11 @@ public class AnimadorIA : NetworkBehaviour
 
         OllamaService.Instance.GenerarComentario(contexto, mensaje =>
         {
-            if (!string.IsNullOrEmpty(mensaje) && Object.HasStateAuthority)
+            // Escribir en la propiedad [Networked] de GameStateManager —
+            // Fusion la replica automáticamente a todos los clientes.
+            if (GameStateManager.Instance != null && !string.IsNullOrEmpty(mensaje))
             {
-                MensajeRed = mensaje.Length > 510
+                GameStateManager.Instance.MensajeAnimador = mensaje.Length > 510
                     ? mensaje.Substring(0, 510)
                     : mensaje;
             }
