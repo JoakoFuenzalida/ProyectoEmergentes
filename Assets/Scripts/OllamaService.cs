@@ -62,14 +62,15 @@ public class OllamaService : MonoBehaviour
     {
         string prompt =
             "Genera UNA pregunta estilo 'Que dice la gente' sobre informatica universitaria.\n" +
-            "La pregunta debe ser del tipo: 'Nombre un/una...' o 'Cual es el/la mas...'.\n" +
-            "Las respuestas son las 5 cosas mas comunes que diria la gente.\n\n" +
+            "La pregunta debe ser del tipo: 'Nombre un/una...' o 'Cual es el/la mas...'.\n\n" +
             "Responde SOLO con este JSON (sin markdown, sin explicacion):\n" +
             "{\"pregunta\":\"Nombre un lenguaje de programacion popular\"," +
             "\"respuestas\":[\"Python\",\"JavaScript\",\"Java\",\"C++\",\"PHP\"]," +
             "\"puntos\":[40,25,15,12,8]}\n\n" +
-            "Reglas: solo letras ASCII (sin tildes ni enyes), exactamente 5 respuestas, " +
-            "los puntos deben sumar 100, respuestas de 1 a 4 palabras cada una.\n" +
+            "Reglas OBLIGATORIAS: solo letras ASCII (sin tildes ni enyes), " +
+            "EXACTAMENTE 5 respuestas (ni mas ni menos), " +
+            "los puntos deben sumar 100, respuestas de 1 a 3 palabras cada una.\n" +
+            "IMPORTANTE: el array respuestas debe tener SOLO 5 elementos.\n" +
             "Genera una pregunta DIFERENTE al ejemplo.";
 
         bool done = false;
@@ -185,8 +186,10 @@ public class OllamaService : MonoBehaviour
         string pregunta = mP.Groups[1].Value.Trim();
         if (string.IsNullOrEmpty(pregunta)) return null;
 
-        // 4) Extraer bloque "respuestas":[...]
+        // 4) Extraer bloque "respuestas":[...]  (con fallback para respuestas truncadas)
         var mR = Regex.Match(raw, @"""respuestas""\s*:\s*\[([^\]]*)\]");
+        if (!mR.Success)
+            mR = Regex.Match(raw, @"""respuestas""\s*:\s*\[([^\]]*)");  // sin ] de cierre (truncado)
         if (!mR.Success) return null;
 
         // 5) Extraer cada string dentro del bloque
