@@ -476,13 +476,8 @@ public class UIGameController : MonoBehaviour
                 var dataActive = GetPlayerData(TurnManager.Instance.ActivePlayer);
                 if (dataActive != null) nombreTurno = dataActive.PlayerName.ToString();
             }
-            else
-            {
-                // TurnManager sin jugador asignado — BuzzerWinnerId como fallback
-                esMiTurno = (GameStateManager.Instance.BuzzerWinnerId == myPlayer.PlayerId);
-                var dataWinner = GetPlayerData(PlayerRef.FromIndex(GameStateManager.Instance.BuzzerWinnerId));
-                if (dataWinner != null) nombreTurno = dataWinner.PlayerName.ToString();
-            }
+            // Si TurnManager aún no tiene jugador asignado, nadie responde
+            // (evita mostrar el input al ganador del buzzer cuando ya no es su turno)
         }
 
         // ── Actualizar HUD ─────────────────────────────────────
@@ -539,37 +534,6 @@ public class UIGameController : MonoBehaviour
             {
                 inputRespuesta.ActivateInputField();
             }
-        }
-
-        // Polling de seguridad: si el estado de red dice que es nuestro turno
-        // pero el evento no llegó a tiempo, lo detectamos aquí frame a frame.
-        if (!_esMiTurnoActual && !isPaused &&
-            GameStateManager.Instance != null &&
-            GameStateManager.Instance.Object != null &&
-            GameStateManager.Instance.Object.IsValid &&
-            !GameStateManager.Instance.IsEvaluating)
-        {
-            var st = GameStateManager.Instance.CurrentState;
-            bool deberiaSerMiTurno = false;
-
-            if (st == GameStateManager.GameState.TypingAnswer &&
-                GameStateManager.Instance.Runner != null)
-            {
-                deberiaSerMiTurno = GameStateManager.Instance.BuzzerWinnerId ==
-                                    GameStateManager.Instance.Runner.LocalPlayer.PlayerId;
-            }
-            else if ((st == GameStateManager.GameState.Playing ||
-                      st == GameStateManager.GameState.Stealing) &&
-                     GameStateManager.Instance.Runner != null)
-            {
-                if (TurnManager.Instance != null && TurnManager.Instance.ActivePlayer != PlayerRef.None)
-                    deberiaSerMiTurno = TurnManager.Instance.IsLocalPlayersTurn;
-                else
-                    deberiaSerMiTurno = GameStateManager.Instance.BuzzerWinnerId ==
-                                        GameStateManager.Instance.Runner.LocalPlayer.PlayerId;
-            }
-
-            if (deberiaSerMiTurno) ActualizarControlInput();
         }
 
         if (isCounting && panelCountdown != null)
