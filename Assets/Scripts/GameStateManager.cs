@@ -187,6 +187,7 @@ public class GameStateManager : NetworkBehaviour
 
                 case nameof(MensajeAnimador):
                     string msg = MensajeAnimador.ToString();
+                    Debug.Log($"[GSM] MensajeAnimador cambió → '{msg}' (IsServer={Runner.IsServer})");
                     if (!string.IsNullOrEmpty(msg))
                         AnimadorIA.NotifyMensaje(msg);
                     break;

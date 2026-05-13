@@ -23,7 +23,11 @@ public class AnimadorIA : MonoBehaviour
     private void OnDisable() => GameStateManager.OnStateChangedEvent -= HandleStateChanged;
 
     // Llamado por GameStateManager.OnMensajeAnimadorChanged en TODOS los clientes
-    public static void NotifyMensaje(string mensaje) => OnMensajeChanged?.Invoke(mensaje);
+    public static void NotifyMensaje(string mensaje)
+    {
+        Debug.Log($"[AnimadorIA] NotifyMensaje → '{mensaje}' | suscriptores={OnMensajeChanged?.GetInvocationList()?.Length ?? 0}");
+        OnMensajeChanged?.Invoke(mensaje);
+    }
 
     // Llamado por GameStateManager cuando inicia/termina la generación de preguntas
     public static void NotifyGenerating(bool generando) => OnGenerandoPreguntas?.Invoke(generando);
