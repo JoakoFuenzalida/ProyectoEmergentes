@@ -63,15 +63,7 @@ public class GameStateManager : NetworkBehaviour
     [Networked] public int PendingPlayerId { get; set; }
 
     // Mensaje del animador — sincronizado automáticamente a todos los clientes
-    [Networked(OnChanged = nameof(OnMensajeAnimadorChanged))]
-    public NetworkString<_512> MensajeAnimador { get; set; }
-
-    private static void OnMensajeAnimadorChanged(Changed<GameStateManager> changed)
-    {
-        string msg = changed.Behaviour.MensajeAnimador.ToString();
-        if (!string.IsNullOrEmpty(msg))
-            AnimadorIA.NotifyMensaje(msg);
-    }
+    [Networked] public NetworkString<_512> MensajeAnimador { get; set; }
 
     public static event Action<GameState> OnStateChangedEvent;
     public static event Action<string, int> OnScoreUpdatedEvent;
@@ -188,11 +180,15 @@ public class GameStateManager : NetworkBehaviour
                     OnTeamNamesUpdatedEvent?.Invoke(); 
                     break;
 
-                case nameof(BuzzerWinnerId): 
-                    if (CurrentState == GameState.TypingAnswer || CurrentState == GameState.Stealing) 
-                    {
-                        OnStateChangedEvent?.Invoke(CurrentState); 
-                    }
+                case nameof(BuzzerWinnerId):
+                    if (CurrentState == GameState.TypingAnswer || CurrentState == GameState.Stealing)
+                        OnStateChangedEvent?.Invoke(CurrentState);
+                    break;
+
+                case nameof(MensajeAnimador):
+                    string msg = MensajeAnimador.ToString();
+                    if (!string.IsNullOrEmpty(msg))
+                        AnimadorIA.NotifyMensaje(msg);
                     break;
             }
         }
