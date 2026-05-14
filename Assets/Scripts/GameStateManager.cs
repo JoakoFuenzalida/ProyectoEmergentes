@@ -79,7 +79,7 @@ public class GameStateManager : NetworkBehaviour
     // Pregunta actual sincronizada — los clientes leen de aquí en vez de _preguntasDinamicas
     [Networked] private NetworkString<_256> _netPregunta   { get; set; }
     [Networked] private NetworkString<_512> _netRespuestas { get; set; }
-    [Networked] private NetworkString<_64>  _netPuntos     { get; set; }
+    [Networked] private NetworkString<_128> _netPuntos     { get; set; }
 
     public static event Action<GameState> OnStateChangedEvent;
     public static event Action<string, int> OnScoreUpdatedEvent;
@@ -228,7 +228,7 @@ public class GameStateManager : NetworkBehaviour
 
         _netPregunta   = pregunta;
         _netRespuestas = respuestas.Length > 511 ? respuestas.Substring(0, 511) : respuestas;
-        _netPuntos     = puntos.Length > 63 ? puntos.Substring(0, 63) : puntos;
+        _netPuntos     = puntos.Length > 127 ? puntos.Substring(0, 127) : puntos;
     }
 
     private static string[] ParseStringArray(string json)

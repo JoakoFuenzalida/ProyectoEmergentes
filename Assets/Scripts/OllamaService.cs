@@ -10,9 +10,10 @@ public class OllamaService : MonoBehaviour
 {
     public static OllamaService Instance { get; private set; }
 
-    [Header("Configuración Ollama")]
-    [SerializeField] private string ollamaUrl = "http://localhost:11434/api/generate";
-    [SerializeField] private string modelo    = "llama3.2";
+    [Header("Configuración Groq")]
+    [SerializeField] private string groqUrl = "https://api.groq.com/openai/v1/chat/completions";
+    [SerializeField] private string apiKey  = "";  // Pegar la API key de groq.com
+    [SerializeField] private string modelo  = "llama-3.3-70b-versatile";
 
     private void Awake()
     {
@@ -68,12 +69,9 @@ public class OllamaService : MonoBehaviour
             "\"respuestas\":[\"Python\",\"JavaScript\",\"Java\",\"C++\",\"PHP\"]," +
             "\"puntos\":[40,25,15,12,8]}\n\n" +
             "Reglas OBLIGATORIAS: solo letras ASCII (sin tildes ni enyes), " +
-            "EXACTAMENTE 5 respuestas (ni mas ni menos), " +
-            "los puntos deben sumar 100, respuestas de 1 a 3 palabras cada una.\n" +
-            "IMPORTANTE: el array respuestas debe tener SOLO 5 elementos.\n" +
+            "entre 5 y 8 respuestas (las mas comunes que diria la gente, ordenadas de mayor a menor frecuencia), " +
+            "los puntos deben sumar 100 y estar en orden decreciente, respuestas de 1 a 3 palabras cada una.\n" +
             "Genera una pregunta DIFERENTE al ejemplo.";
-
-        bool done = false;
 
         yield return StartCoroutine(EnviarPrompt(prompt, raw =>
         {
@@ -89,9 +87,8 @@ public class OllamaService : MonoBehaviour
             {
                 onError?.Invoke($"Excepcion extrayendo pregunta: {e.Message}");
             }
-            done = true;
         },
-        e => { onError?.Invoke(e); done = true; }));
+        e => onError?.Invoke(e)));
     }
 
     // ─── Comentarios del animador ─────────────────────────────────
@@ -104,9 +101,9 @@ public class OllamaService : MonoBehaviour
     private IEnumerator CoroutineGenerarComentario(string contexto, Action<string> onComplete)
     {
         string prompt =
-            "You are Martin Carcamo, a famous Chilean TV host. " +
-            "Write ONE short enthusiastic phrase (max 8 words) in Spanish for this game moment: " +
-            contexto + ". Only the phrase, no quotes, no asterisks.";
+            "Eres Martin Carcamo, animador chileno de television. " +
+            "Escribe UNA frase corta y entusiasta (maximo 8 palabras) en español para este momento del juego: " +
+            contexto + ". Solo la frase, sin comillas, sin asteriscos.";
 
         yield return StartCoroutine(EnviarPrompt(prompt, r =>
         {
@@ -130,21 +127,30 @@ public class OllamaService : MonoBehaviour
         return g[UnityEngine.Random.Range(0, g.Length)];
     }
 
-    // ─── HTTP helper ──────────────────────────────────────────────
+    // ─── HTTP helper (formato Groq / OpenAI) ─────────────────────
 
     private IEnumerator EnviarPrompt(string prompt,
                                      Action<string> onSuccess,
                                      Action<string> onError)
     {
-        var body     = new OllamaRequest { model = modelo, prompt = prompt, stream = false, options = new OllamaOptions() };
-        var bodyJson = JsonUtility.ToJson(body);
-        byte[] bytes = Encoding.UTF8.GetBytes(bodyJson);
+        var body = new GroqRequest
+        {
+            model       = modelo,
+            messages    = new GroqMessage[] { new GroqMessage { role = "user", content = prompt } },
+            max_tokens  = 1024,
+            temperature = 0.7f,
+            stream      = false
+        };
 
-        using var req = new UnityWebRequest(ollamaUrl, "POST");
+        string bodyJson = JsonUtility.ToJson(body);
+        byte[] bytes    = Encoding.UTF8.GetBytes(bodyJson);
+
+        using var req = new UnityWebRequest(groqUrl, "POST");
         req.uploadHandler   = new UploadHandlerRaw(bytes);
         req.downloadHandler = new DownloadHandlerBuffer();
         req.SetRequestHeader("Content-Type", "application/json");
-        req.timeout = 120;
+        req.SetRequestHeader("Authorization", $"Bearer {apiKey}");
+        req.timeout = 60;
 
         yield return req.SendWebRequest();
 
@@ -156,8 +162,26 @@ public class OllamaService : MonoBehaviour
 
         try
         {
-            var resp = JsonUtility.FromJson<OllamaResponse>(req.downloadHandler.text);
-            onSuccess?.Invoke(resp.response ?? "");
+            // Extraer el campo "content" del primer choice via regex
+            // (más robusto que JsonUtility para JSON anidado con arrays)
+            string responseText = req.downloadHandler.text;
+            var match = Regex.Match(responseText, @"""content""\s*:\s*""((?:[^""\\]|\\.)*)""");
+
+            if (!match.Success)
+            {
+                onError?.Invoke($"No se encontró 'content' en: {responseText.Substring(0, Mathf.Min(300, responseText.Length))}");
+                yield break;
+            }
+
+            // Desescapar el contenido (el modelo devuelve JSON como string escapado)
+            string content = match.Groups[1].Value;
+            content = content.Replace("\\n", "\n")
+                             .Replace("\\r", "")
+                             .Replace("\\t", "\t")
+                             .Replace("\\\"", "\"")
+                             .Replace("\\\\", "\\");
+
+            onSuccess?.Invoke(content);
         }
         catch (Exception e)
         {
@@ -165,55 +189,49 @@ public class OllamaService : MonoBehaviour
         }
     }
 
-    // ─── Extractor robusto por regex (sin JsonUtility) ────────────
-    // JsonUtility falla con acentos, \uXXXX y otros chars no-ASCII.
-    // Este extractor busca los campos directamente con regex.
+    // ─── Extractor robusto por regex ──────────────────────────────
 
     private static PreguntaData? ExtraerPregunta(string raw)
     {
-        // 1) Decodificar escapes \uXXXX a caracteres reales
+        // 1) Decodificar escapes \uXXXX
         raw = Regex.Replace(raw, @"\\u([0-9a-fA-F]{4})",
             m => ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString());
 
-        // 2) Eliminar saltos de línea/tabs internos y comillas escapadas
+        // 2) Limpiar saltos de línea y comillas escapadas
         raw = raw.Replace("\r", " ").Replace("\n", " ").Replace("\t", " ");
-        raw = raw.Replace("\\\"", "'");   // \" → ' para no romper los límites de string
-        raw = raw.Replace("\\\\", "\\");  // \\ → \
+        raw = raw.Replace("\\\"", "'").Replace("\\\\", "\\");
 
-        // 3) Extraer "pregunta":"..."  — toma todo hasta la próxima " no escapada
+        // 3) Extraer "pregunta":"..."
         var mP = Regex.Match(raw, @"""pregunta""\s*:\s*""([^""]*)""");
         if (!mP.Success) return null;
         string pregunta = mP.Groups[1].Value.Trim();
         if (string.IsNullOrEmpty(pregunta)) return null;
 
-        // 4) Extraer bloque "respuestas":[...]  (con fallback para respuestas truncadas)
+        // 4) Extraer "respuestas":[...] (con fallback para JSON truncado)
         var mR = Regex.Match(raw, @"""respuestas""\s*:\s*\[([^\]]*)\]");
         if (!mR.Success)
-            mR = Regex.Match(raw, @"""respuestas""\s*:\s*\[([^\]]*)");  // sin ] de cierre (truncado)
+            mR = Regex.Match(raw, @"""respuestas""\s*:\s*\[([^\]]*)");
         if (!mR.Success) return null;
 
-        // 5) Extraer cada string dentro del bloque
+        // 5) Extraer cada string del array
         var respuestas = new List<string>();
         foreach (Match m in Regex.Matches(mR.Groups[1].Value, @"""([^""]*)"""))
             respuestas.Add(m.Groups[1].Value.Trim());
 
         if (respuestas.Count < 3) return null;
+        if (respuestas.Count > 8) respuestas = respuestas.GetRange(0, 8);
 
-        // 6) Extraer "puntos":[n,n,n,n,n]
-        int[] puntos = new[] { 40, 25, 20, 10, 5 };
+        // 6) Extraer "puntos":[...]
         var mPuntos = Regex.Match(raw, @"""puntos""\s*:\s*\[([0-9,\s]+)\]");
+        int[] puntos = GenerarPuntosDefault(respuestas.Count);
         if (mPuntos.Success)
         {
             var pList = new List<int>();
             foreach (var token in mPuntos.Groups[1].Value.Split(','))
                 if (int.TryParse(token.Trim(), out int v)) pList.Add(v);
-            if (pList.Count >= 3) puntos = pList.ToArray();
+            if (pList.Count >= respuestas.Count)
+                puntos = pList.GetRange(0, respuestas.Count).ToArray();
         }
-
-        // 7) Normalizar a 5 respuestas y 5 puntos
-        while (respuestas.Count < 5) respuestas.Add("Otro");
-        if (respuestas.Count > 5) respuestas = respuestas.GetRange(0, 5);
-        if (puntos.Length < 5) puntos = new[] { 40, 25, 20, 10, 5 };
 
         string[] sinonimos = GenerarSinonimos(respuestas.ToArray());
 
@@ -228,9 +246,22 @@ public class OllamaService : MonoBehaviour
         };
     }
 
+    // Distribución decreciente de 100 puntos según cantidad de respuestas
+    private static int[] GenerarPuntosDefault(int count)
+    {
+        float[] pesos = { 0.35f, 0.25f, 0.16f, 0.11f, 0.07f, 0.04f, 0.02f, 0.00f };
+        int[] puntos = new int[count];
+        int total = 0;
+        for (int i = 0; i < count - 1; i++)
+        {
+            puntos[i] = Mathf.Max(1, Mathf.RoundToInt(100f * pesos[i]));
+            total += puntos[i];
+        }
+        puntos[count - 1] = Mathf.Max(1, 100 - total);
+        return puntos;
+    }
+
     // ─── Sinónimos automáticos ─────────────────────────────────────
-    // Para cada respuesta, busca en el diccionario y agrega cada palabra
-    // de respuestas multi-palabra como sinónimo adicional.
 
     private static readonly Dictionary<string, string> _sinoDict =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -335,7 +366,6 @@ public class OllamaService : MonoBehaviour
             _sinoDict.TryGetValue(resp, out string syns);
             syns = syns ?? "";
 
-            // Agregar cada palabra de respuestas multi-palabra (>2 letras) como sinónimo
             var palabras = resp.Split(' ');
             if (palabras.Length > 1)
             {
@@ -349,9 +379,15 @@ public class OllamaService : MonoBehaviour
         return resultado;
     }
 
-    // ─── Clases de serialización HTTP ─────────────────────────────
+    // ─── Clases de serialización HTTP (Groq / OpenAI) ─────────────
 
-    [Serializable] private class OllamaOptions  { public int num_predict = 1024; }
-    [Serializable] private class OllamaRequest  { public string model; public string prompt; public bool stream; public OllamaOptions options; }
-    [Serializable] private class OllamaResponse { public string response; public bool done; }
+    [Serializable] private class GroqMessage { public string role; public string content; }
+    [Serializable] private class GroqRequest
+    {
+        public string       model;
+        public GroqMessage[] messages;
+        public int          max_tokens;
+        public float        temperature;
+        public bool         stream;
+    }
 }
