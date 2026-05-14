@@ -34,9 +34,20 @@ public class GameStateManager : NetworkBehaviour
     private PreguntaData[] BancoActivo => (_preguntasDinamicas != null && _preguntasDinamicas.Length > 0)
         ? _preguntasDinamicas : bancoDePreguntas;
 
-    public string PreguntaActual    => (BancoActivo != null && BancoActivo.Length > 0) ? BancoActivo[CurrentQuestionIndex].Pregunta   : "Sin pregunta configurada";
-    public string[] RespuestasValidas => (BancoActivo != null && BancoActivo.Length > 0) ? BancoActivo[CurrentQuestionIndex].Respuestas : new string[0];
-    public int[] PuntosRespuestas   => (BancoActivo != null && BancoActivo.Length > 0) ? BancoActivo[CurrentQuestionIndex].Puntos     : new int[0];
+    public string PreguntaActual =>
+        Object.HasStateAuthority
+            ? (BancoActivo != null && BancoActivo.Length > 0 ? BancoActivo[CurrentQuestionIndex].Pregunta : "Sin pregunta configurada")
+            : (_netPregunta.Length > 0 ? _netPregunta.ToString() : "Cargando...");
+
+    public string[] RespuestasValidas =>
+        Object.HasStateAuthority
+            ? (BancoActivo != null && BancoActivo.Length > 0 ? BancoActivo[CurrentQuestionIndex].Respuestas : new string[0])
+            : ParseStringArray(_netRespuestas.ToString());
+
+    public int[] PuntosRespuestas =>
+        Object.HasStateAuthority
+            ? (BancoActivo != null && BancoActivo.Length > 0 ? BancoActivo[CurrentQuestionIndex].Puntos : new int[0])
+            : ParseIntArray(_netPuntos.ToString());
 
     [Networked] public NetworkBool IsGameStarted { get; set; }
     [Networked] public GameState CurrentState { get; private set; } = GameState.WaitingForPlayers;
@@ -64,6 +75,11 @@ public class GameStateManager : NetworkBehaviour
 
     // Mensaje del animador — sincronizado automáticamente a todos los clientes
     [Networked] public NetworkString<_512> MensajeAnimador { get; set; }
+
+    // Pregunta actual sincronizada — los clientes leen de aquí en vez de _preguntasDinamicas
+    [Networked] private NetworkString<_256> _netPregunta   { get; set; }
+    [Networked] private NetworkString<_512> _netRespuestas { get; set; }
+    [Networked] private NetworkString<_64>  _netPuntos     { get; set; }
 
     public static event Action<GameState> OnStateChangedEvent;
     public static event Action<string, int> OnScoreUpdatedEvent;
@@ -151,11 +167,12 @@ public class GameStateManager : NetworkBehaviour
             if (CurrentState == GameState.RoundEnd && Timer.Expired(Runner))
             {
                 CurrentQuestionIndex = (CurrentQuestionIndex + 1) % (BancoActivo != null && BancoActivo.Length > 0 ? BancoActivo.Length : 1);
-                
+                SincronizarPreguntaActual();
+
                 CurrentState = GameState.Countdown;
-                Timer = TickTimer.CreateFromSeconds(Runner, 5.0f); 
+                Timer = TickTimer.CreateFromSeconds(Runner, 5.0f);
                 BuzzerWinnerId = -1;
-                RevealedAnswersMask = 0; 
+                RevealedAnswersMask = 0;
                 FaceOffChanceUsed = false;
             }
         }
@@ -197,50 +214,21 @@ public class GameStateManager : NetworkBehaviour
     
     // ─── Preguntas dinámicas (IA) ──────────────────────────────────
 
-    // El host llama esto con las preguntas generadas por Ollama.
-    // Se serializa cada pregunta como JSON y se envía via RPC a todos los clientes.
-    public void RPC_CargarPreguntasDinamicas(PreguntaData[] preguntas)
+    // Escribe la pregunta actual en las propiedades [Networked] para que todos los
+    // clientes la reciban en el mismo snapshot que el cambio de estado.
+    private void SincronizarPreguntaActual()
     {
         if (!Object.HasStateAuthority) return;
+        if (BancoActivo == null || BancoActivo.Length == 0) return;
 
-        RPC_LimpiarPreguntasDinamicas(preguntas.Length);
+        var q = BancoActivo[CurrentQuestionIndex];
+        string pregunta = q.Pregunta.Length > 255 ? q.Pregunta.Substring(0, 255) : q.Pregunta;
+        string respuestas = "[\"" + string.Join("\",\"", q.Respuestas) + "\"]";
+        string puntos     = "[" + string.Join(",", q.Puntos) + "]";
 
-        for (int i = 0; i < preguntas.Length; i++)
-        {
-            var p = preguntas[i];
-            string respuestasJson = "[\"" + string.Join("\",\"", p.Respuestas) + "\"]";
-            string puntosJson     = "[" + string.Join(",", p.Puntos) + "]";
-            // Sinónimos: cada elemento es "sin1|sin2|sin3" separado por |
-            string sinonimosJson  = (p.Sinonimos != null && p.Sinonimos.Length > 0)
-                ? "[\"" + string.Join("\",\"", p.Sinonimos) + "\"]"
-                : "[]";
-            RPC_AgregarPreguntaDinamica(i, p.Pregunta, respuestasJson, puntosJson, sinonimosJson);
-        }
-    }
-
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_LimpiarPreguntasDinamicas(int cantidad)
-    {
-        _preguntasDinamicas = new PreguntaData[cantidad];
-        CurrentQuestionIndex = 0;
-        Debug.Log($"[GSM] Banco dinámico preparado para {cantidad} preguntas.");
-    }
-
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_AgregarPreguntaDinamica(int indice, string pregunta,
-                                              string respuestasJson, string puntosJson,
-                                              string sinonimosJson)
-    {
-        if (_preguntasDinamicas == null || indice >= _preguntasDinamicas.Length) return;
-
-        _preguntasDinamicas[indice] = new PreguntaData
-        {
-            Pregunta   = pregunta,
-            Respuestas = ParseStringArray(respuestasJson),
-            Puntos     = ParseIntArray(puntosJson),
-            Sinonimos  = sinonimosJson == "[]" ? new string[0] : ParseStringArray(sinonimosJson)
-        };
-        Debug.Log($"[GSM] Pregunta {indice} cargada: {pregunta}");
+        _netPregunta   = pregunta;
+        _netRespuestas = respuestas.Length > 511 ? respuestas.Substring(0, 511) : respuestas;
+        _netPuntos     = puntos.Length > 63 ? puntos.Substring(0, 63) : puntos;
     }
 
     private static string[] ParseStringArray(string json)
@@ -269,19 +257,19 @@ public class GameStateManager : NetworkBehaviour
     {
         if (!Object.HasStateAuthority) return;
 
-        // Sincronizar preguntas IA a todos los clientes ahora que están conectados
-        if (_preguntasDinamicas != null && _preguntasDinamicas.Length > 0)
-            RPC_CargarPreguntasDinamicas(_preguntasDinamicas);
-
         IsGameStarted = true;
-        CurrentState = GameState.Countdown;
-        Timer = TickTimer.CreateFromSeconds(Runner, 5.0f);
+        ErrorCount = 0; RoundScore = 0; ScoreA = 0; ScoreB = 0; CurrentRound = 1;
+        CurrentQuestionIndex = 0;
         BuzzerWinnerId = -1;
         RevealedAnswersMask = 0;
         FaceOffChanceUsed = false;
         IsEvaluating = false;
-        ErrorCount = 0; RoundScore = 0; ScoreA = 0; ScoreB = 0; CurrentRound = 1;
-        CurrentQuestionIndex = 0;
+
+        // Escribir pregunta actual en [Networked] — llega a todos en el mismo snapshot
+        SincronizarPreguntaActual();
+
+        CurrentState = GameState.Countdown;
+        Timer = TickTimer.CreateFromSeconds(Runner, 5.0f);
     }
 
     public void RegisterCorrectAnswer(int points)
