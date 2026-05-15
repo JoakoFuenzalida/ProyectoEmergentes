@@ -335,7 +335,7 @@ public class GameStateManager : NetworkBehaviour
                 if (player.PlayerId != BuzzerWinnerId) { otroJugadorId = player.PlayerId; break; }
             if (otroJugadorId != -1) BuzzerWinnerId = otroJugadorId;
 
-            if (TurnManager.Instance != null) TurnManager.Instance.RPC_AdvanceTurnInTeam(stealingTeam);
+            if (TurnManager.Instance != null) TurnManager.Instance.AdvanceTurnInTeam(stealingTeam);
         }
         else ErrorCount = newErrors;
     }
@@ -440,10 +440,10 @@ public class GameStateManager : NetworkBehaviour
                 ActiveTeam = (pData != null && pData.TeamIndex == 2) ? "B" : "A";
                 CurrentState = GameState.Playing; 
 
-                if (TurnManager.Instance != null) 
+                if (TurnManager.Instance != null)
                 {
                     TurnManager.Instance.ResetTurnIndices();
-                    TurnManager.Instance.RPC_AdvanceTurnInTeam(ActiveTeam.ToString());
+                    TurnManager.Instance.AdvanceTurnInTeam(ActiveTeam.ToString());
                 }
             }
             else 
@@ -458,13 +458,25 @@ public class GameStateManager : NetworkBehaviour
                         if (pRef.PlayerId != playerId) { otroJugadorId = pRef.PlayerId; break; }
                     }
 
-                    if (otroJugadorId != -1) BuzzerWinnerId = otroJugadorId; 
-                    else CurrentState = GameState.Playing;
+                    if (otroJugadorId != -1) BuzzerWinnerId = otroJugadorId;
+                    else
+                    {
+                        CurrentState = GameState.Playing;
+                        if (TurnManager.Instance != null)
+                        {
+                            TurnManager.Instance.ResetTurnIndices();
+                            TurnManager.Instance.AdvanceTurnInTeam(ActiveTeam.ToString());
+                        }
+                    }
                 } 
-                else 
+                else
                 {
                     CurrentState = GameState.Playing;
-                    if (TurnManager.Instance != null) TurnManager.Instance.RPC_AdvanceTurnInTeam(ActiveTeam.ToString());
+                    if (TurnManager.Instance != null)
+                    {
+                        TurnManager.Instance.ResetTurnIndices();
+                        TurnManager.Instance.AdvanceTurnInTeam(ActiveTeam.ToString());
+                    }
                 }
             }
         }
@@ -494,7 +506,7 @@ public class GameStateManager : NetworkBehaviour
                     else
                     {
                         // Si acertó pero aún quedan respuestas, pasamos el turno al siguiente del equipo
-                        if (TurnManager.Instance != null) TurnManager.Instance.RPC_AdvanceTurnInTeam(ActiveTeam.ToString());
+                        if (TurnManager.Instance != null) TurnManager.Instance.AdvanceTurnInTeam(ActiveTeam.ToString());
                     }
                 }
                 else 

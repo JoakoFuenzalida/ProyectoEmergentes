@@ -82,6 +82,9 @@ public class UIGameController : MonoBehaviour
 
     // ── BUG FIX: Guardamos si ES nuestro turno para el Update ─────
     private bool _esMiTurnoActual = false;
+    // Reintento de buzzer: cuando se gana el buzzer, reintentar ActualizarControlInput
+    // durante N frames para cubrir retrasos de sincronización de red
+    private int _buzzerRetryFrames = 0;
 
     private void Awake()
     {
@@ -424,12 +427,14 @@ public class UIGameController : MonoBehaviour
                 localTimer = 5.0f;
                 isCounting = true;
                 _esMiTurnoActual = false; // BUG FIX: resetear en countdown
+                _buzzerRetryFrames = 0;
                 break;
 
             case GameStateManager.GameState.WaitingForBuzzer:
             case GameStateManager.GameState.RoundEnd:
             case GameStateManager.GameState.GameOver:
                 isCounting = false;
+                _buzzerRetryFrames = 0;
                 if (panelCountdown) panelCountdown.SetActive(false);
                 if (inputRespuesta) inputRespuesta.gameObject.SetActive(false);
                 Cursor.lockState = CursorLockMode.Locked;
@@ -441,11 +446,14 @@ public class UIGameController : MonoBehaviour
             case GameStateManager.GameState.Playing:
             case GameStateManager.GameState.Stealing:
                 isCounting = false;
+                if (newState == GameStateManager.GameState.TypingAnswer)
+                    _buzzerRetryFrames = 30; // reintentar hasta 30 frames (~0.5s) para cubrir latencia de red
                 StartCoroutine(ActualizarInputConReintentoCoroutine());
                 break;
 
             case GameStateManager.GameState.WaitingForPlayers:
                 isCounting = false;
+                _buzzerRetryFrames = 0;
                 if (lobbyPanel) lobbyPanel.SetActive(true);
                 if (panelPregunta) panelPregunta.SetActive(false);
                 if (panelRespuestas) panelRespuestas.SetActive(false);
@@ -489,8 +497,9 @@ public class UIGameController : MonoBehaviour
         // ── Fase de Podio (Buzzer) ─────────────────────────────
         if (currentState == GameStateManager.GameState.TypingAnswer)
         {
-            esMiTurno = (GameStateManager.Instance.BuzzerWinnerId == myPlayer.PlayerId);
-            var dataWinner = GetPlayerData(PlayerRef.FromIndex(GameStateManager.Instance.BuzzerWinnerId));
+            int buzzerId = GameStateManager.Instance.BuzzerWinnerId;
+            esMiTurno = (buzzerId == myPlayer.PlayerId);
+            var dataWinner = GetPlayerData(PlayerRef.FromIndex(buzzerId));
             if (dataWinner != null) nombreTurno = dataWinner.PlayerName.ToString();
         }
         // ── Fase de Mesa y Robo ────────────────────────────────
@@ -549,6 +558,23 @@ public class UIGameController : MonoBehaviour
     private void Update()
     {
         if (Input.GetKeyDown(KeyCode.Escape)) TogglePauseMenu();
+
+        // Polling de seguridad para el buzzer: reintenta ActualizarControlInput() cada frame
+        // hasta _buzzerRetryFrames veces, para cubrir cualquier retraso de sincronización de red.
+        if (_buzzerRetryFrames > 0)
+        {
+            _buzzerRetryFrames--;
+            bool gsValid = GameStateManager.Instance != null &&
+                           GameStateManager.Instance.Object != null &&
+                           GameStateManager.Instance.Object.IsValid;
+            if (gsValid &&
+                GameStateManager.Instance.CurrentState == GameStateManager.GameState.TypingAnswer &&
+                GameStateManager.Instance.BuzzerWinnerId != -1 &&
+                !GameStateManager.Instance.IsEvaluating)
+            {
+                ActualizarControlInput();
+            }
+        }
 
         if (inputRespuesta != null && inputRespuesta.gameObject.activeInHierarchy)
         {
