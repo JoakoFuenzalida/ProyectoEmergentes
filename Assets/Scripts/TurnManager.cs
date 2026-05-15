@@ -34,7 +34,7 @@ public class TurnManager : NetworkBehaviour
     public override void Spawned()
     {
         Instance = this;
-        _changes = GetChangeDetector(ChangeDetector.Source.SimulationState);
+        _changes  = GetChangeDetector(ChangeDetector.Source.SimulationState);
         GameStateManager.OnStateChangedEvent      += HandleStateChanged;
         GameStateManager.OnActiveTeamChangedEvent += HandleTeamChanged;
     }
@@ -67,7 +67,6 @@ public class TurnManager : NetworkBehaviour
             switch (change)
             {
                 case nameof(ActivePlayer):
-                    Debug.Log($"[TurnManager] Turno → {ActivePlayer}");
                     OnTurnChangedEvent?.Invoke(ActivePlayer);
                     break;
             }
@@ -136,8 +135,5 @@ public class TurnManager : NetworkBehaviour
         }
     }
 
-    private void HandleTeamChanged(string newTeam)
-    {
-        Debug.Log($"[TurnManager] Equipo activo cambió a: {newTeam}");
-    }
+    private void HandleTeamChanged(string newTeam) { }
 }
