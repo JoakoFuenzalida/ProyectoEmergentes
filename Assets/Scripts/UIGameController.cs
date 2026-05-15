@@ -97,6 +97,9 @@ public class UIGameController : MonoBehaviour
         if (inputEdicionEquipoA != null) inputEdicionEquipoA.gameObject.SetActive(false);
         if (inputEdicionEquipoB != null) inputEdicionEquipoB.gameObject.SetActive(false);
 
+        // Asegurar que el panel del animador empiece oculto — se muestra al iniciar partida
+        if (panelAnimador != null) panelAnimador.SetActive(false);
+
         if (textoNombreJugadorLobby != null && string.IsNullOrWhiteSpace(textoNombreJugadorLobby.text))
             textoNombreJugadorLobby.text = "Jugador";
 
@@ -132,16 +135,18 @@ public class UIGameController : MonoBehaviour
     private void MostrarBurbujaAnimador(string mensaje)
     {
         if (panelAnimador == null || textoAnimador == null) return;
-        StopCoroutine(nameof(OcultarBurbujaCoroutine));
+        StopCoroutine(nameof(LimpiarMensajeCoroutine));
         textoAnimador.text = mensaje;
-        panelAnimador.SetActive(true);
-        StartCoroutine(nameof(OcultarBurbujaCoroutine));
+        panelAnimador.SetActive(true);        // por si el padre estaba inactivo
+        StartCoroutine(nameof(LimpiarMensajeCoroutine));
     }
 
-    private IEnumerator OcultarBurbujaCoroutine()
+    // No oculta el panel — solo borra el texto después de un rato para
+    // que el panel de Martín quede limpio esperando el siguiente comentario
+    private IEnumerator LimpiarMensajeCoroutine()
     {
-        yield return new WaitForSeconds(6f);
-        if (panelAnimador != null) panelAnimador.SetActive(false);
+        yield return new WaitForSeconds(9f);
+        if (textoAnimador != null) textoAnimador.text = "";
     }
 
     private void HandleGenerandoPreguntas(bool generando)
@@ -379,6 +384,25 @@ public class UIGameController : MonoBehaviour
 
         switch (newState)
         {
+            case GameStateManager.GameState.Intro:
+                if (lobbyPanel) lobbyPanel.SetActive(false);
+                if (roomPanel) roomPanel.SetActive(false);
+                if (panelPregunta) panelPregunta.SetActive(false);
+                if (panelRespuestas) panelRespuestas.SetActive(false);
+                if (panelCountdown) panelCountdown.SetActive(false);
+                if (inputRespuesta) inputRespuesta.gameObject.SetActive(false);
+                if (panelAnimador != null) panelAnimador.SetActive(true);
+                if (textoAnimador != null && GameStateManager.Instance != null)
+                {
+                    string eqA = GameStateManager.Instance.NombreEquipoA.ToString();
+                    string eqB = GameStateManager.Instance.NombreEquipoB.ToString();
+                    textoAnimador.text = $"¡Bienvenidos a los 100 Chilenos Dicen!\n{eqA} vs {eqB}";
+                }
+                Cursor.lockState = CursorLockMode.Locked;
+                Cursor.visible = false;
+                _esMiTurnoActual = false;
+                break;
+
             case GameStateManager.GameState.Countdown:
                 if (lobbyPanel) lobbyPanel.SetActive(false);
                 if (roomPanel) roomPanel.SetActive(false);
@@ -393,6 +417,8 @@ public class UIGameController : MonoBehaviour
                 if (textoTurnoHUD != null) textoTurnoHUD.gameObject.SetActive(true);
                 if (textoPreguntaPrincipal != null && GameStateManager.Instance != null)
                     textoPreguntaPrincipal.text = GameStateManager.Instance.PreguntaActual;
+                // Mostrar panel del animador al inicio de cada ronda
+                if (panelAnimador != null) panelAnimador.SetActive(true);
                 Cursor.lockState = CursorLockMode.Locked;
                 Cursor.visible = false;
                 localTimer = 5.0f;
@@ -430,6 +456,8 @@ public class UIGameController : MonoBehaviour
                 if (labelMisPuntos != null) labelMisPuntos.SetActive(false);
                 if (valorMisPuntos != null) valorMisPuntos.gameObject.SetActive(false);
                 if (textoTurnoHUD != null) textoTurnoHUD.gameObject.SetActive(false);
+                // Ocultar panel del animador en el lobby
+                if (panelAnimador != null) panelAnimador.SetActive(false);
                 Cursor.lockState = CursorLockMode.None;
                 Cursor.visible = true;
                 _esMiTurnoActual = false;

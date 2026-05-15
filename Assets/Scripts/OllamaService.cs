@@ -23,6 +23,26 @@ public class OllamaService : MonoBehaviour
 
     // ─── Preguntas: 1 por llamada ─────────────────────────────────
 
+    // Subtemas para forzar variedad entre las 5 preguntas de cada partida
+    private static readonly string[] _temas =
+    {
+        "lenguajes de programacion",
+        "sistemas operativos de escritorio o movil",
+        "bases de datos relacionales o NoSQL",
+        "herramientas de desarrollo (IDE, control de versiones, etc.)",
+        "conceptos de programacion orientada a objetos",
+        "estructuras de datos clasicas",
+        "redes y protocolos de internet",
+        "hardware interno de un computador",
+        "empresas tecnologicas famosas",
+        "roles y profesiones en informatica",
+        "frameworks o librerias de desarrollo web",
+        "seguridad informatica",
+        "servicios de computacion en la nube",
+        "inteligencia artificial y machine learning",
+        "aplicaciones o software de uso cotidiano",
+    };
+
     public void GenerarPreguntas(int cantidad,
                                   Action<PreguntaData[]> onComplete,
                                   Action<string> onError)
@@ -34,14 +54,25 @@ public class OllamaService : MonoBehaviour
                                                    Action<PreguntaData[]> onComplete,
                                                    Action<string> onError)
     {
-        var lista = new List<PreguntaData>();
+        var lista      = new List<PreguntaData>();
+        var previas    = new List<string>();          // se pasan al prompt para evitar repeticion
+
+        // Mezclar temas y tomar los primeros 'cantidad'
+        var temasMezclados = new List<string>(_temas);
+        for (int k = temasMezclados.Count - 1; k > 0; k--)
+        {
+            int j = UnityEngine.Random.Range(0, k + 1);
+            (temasMezclados[k], temasMezclados[j]) = (temasMezclados[j], temasMezclados[k]);
+        }
 
         for (int i = 0; i < cantidad; i++)
         {
+            string tema     = temasMezclados[i % temasMezclados.Count];
             PreguntaData resultado = default;
             string errorMsg        = null;
 
             yield return StartCoroutine(CoroutineGenerarUnaPregunta(
+                tema, previas,
                 p => resultado = p,
                 e => errorMsg  = e));
 
@@ -52,26 +83,39 @@ public class OllamaService : MonoBehaviour
             }
 
             lista.Add(resultado);
+            previas.Add(resultado.Pregunta);   // registrar para que el próximo prompt la evite
             Debug.Log($"[OllamaService] Pregunta {i+1}/{cantidad} OK: {resultado.Pregunta}");
         }
 
         onComplete?.Invoke(lista.ToArray());
     }
 
-    private IEnumerator CoroutineGenerarUnaPregunta(Action<PreguntaData> onComplete,
+    private IEnumerator CoroutineGenerarUnaPregunta(string tema,
+                                                     List<string> previas,
+                                                     Action<PreguntaData> onComplete,
                                                      Action<string> onError)
     {
+        // Construir lista de preguntas ya generadas para evitar repetición
+        string listaPrevias = previas.Count > 0
+            ? "Preguntas YA generadas en esta partida (NO repetir ni hacer preguntas similares):\n" +
+              string.Join("\n", previas.ConvertAll(p => "- " + p)) + "\n\n"
+            : "";
+
         string prompt =
-            "Genera UNA pregunta estilo 'Que dice la gente' sobre informatica universitaria.\n" +
-            "La pregunta debe ser del tipo: 'Nombre un/una...' o 'Cual es el/la mas...'.\n\n" +
-            "Responde SOLO con este JSON (sin markdown, sin explicacion):\n" +
-            "{\"pregunta\":\"Nombre un lenguaje de programacion popular\"," +
-            "\"respuestas\":[\"Python\",\"JavaScript\",\"Java\",\"C++\",\"PHP\"]," +
-            "\"puntos\":[40,25,15,12,8]}\n\n" +
-            "Reglas OBLIGATORIAS: solo letras ASCII (sin tildes ni enyes), " +
-            "entre 5 y 8 respuestas (las mas comunes que diria la gente, ordenadas de mayor a menor frecuencia), " +
-            "los puntos deben sumar 100 y estar en orden decreciente, respuestas de 1 a 3 palabras cada una.\n" +
-            "Genera una pregunta DIFERENTE al ejemplo.";
+            $"Eres un presentador de un programa de concurso chileno. " +
+            $"Genera UNA pregunta estilo 'Que dice la gente' (encuesta de opinion popular) " +
+            $"sobre el tema: {tema}.\n" +
+            "La pregunta debe ser del tipo: 'Nombre un/una...' o 'Cual es el/la mas...'.\n" +
+            "IMPORTANTE: La pregunta Y todas las respuestas deben estar en ESPAÑOL.\n\n" +
+            listaPrevias +
+            "Responde SOLO con este JSON exacto (sin markdown, sin texto extra):\n" +
+            "{\"pregunta\":\"...\",\"respuestas\":[\"...\"],\"puntos\":[...]}\n\n" +
+            "Reglas OBLIGATORIAS: " +
+            "todo en ESPAÑOL, " +
+            "solo letras ASCII (sin tildes ni enyes), " +
+            "entre 5 y 8 respuestas (ordenadas de mayor a menor frecuencia popular), " +
+            "los puntos deben sumar exactamente 100 y estar en orden decreciente, " +
+            "respuestas de 1 a 3 palabras cada una.";
 
         yield return StartCoroutine(EnviarPrompt(prompt, raw =>
         {
@@ -90,6 +134,31 @@ public class OllamaService : MonoBehaviour
         },
         e => onError?.Invoke(e)));
     }
+
+    // ─── Bienvenida del conductor (mensaje más largo, para el Intro) ──
+
+    public void GenerarBienvenida(string contexto, Action<string> onComplete)
+    {
+        StartCoroutine(CoroutineGenerarBienvenida(contexto, onComplete));
+    }
+
+    private IEnumerator CoroutineGenerarBienvenida(string contexto, Action<string> onComplete)
+    {
+        string prompt =
+            "Eres Martin Carcamo, animador chileno de television, conductor del programa '100 Chilenos Dicen'. " +
+            "Escribe UNA frase entusiasta en español (maximo 25 palabras) para dar la bienvenida al programa con este contexto: " +
+            contexto + ". Solo la frase, sin comillas, sin asteriscos.";
+
+        yield return StartCoroutine(EnviarPrompt(prompt, r =>
+        {
+            string c = r.Trim().Replace("*", "").Replace("\"", "").Replace("\n", " ");
+            onComplete?.Invoke(c.Length >= 5 ? c.Substring(0, Mathf.Min(250, c.Length)) : FraseBienvenidaFallback());
+        },
+        _ => onComplete?.Invoke(FraseBienvenidaFallback())));
+    }
+
+    private static string FraseBienvenidaFallback() =>
+        "¡Bienvenidos a los 100 Chilenos Dicen! ¡Que comience el juego!";
 
     // ─── Comentarios del animador ─────────────────────────────────
 
@@ -138,7 +207,7 @@ public class OllamaService : MonoBehaviour
             model       = modelo,
             messages    = new GroqMessage[] { new GroqMessage { role = "user", content = prompt } },
             max_tokens  = 1024,
-            temperature = 0.7f,
+            temperature = 0.9f,
             stream      = false
         };
 

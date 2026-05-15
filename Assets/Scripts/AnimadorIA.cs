@@ -41,11 +41,52 @@ public class AnimadorIA : MonoBehaviour
 
         switch (estado)
         {
-            case GameStateManager.GameState.Countdown:  GenerarYMostrar("nueva ronda comenzando"); break;
-            case GameStateManager.GameState.RoundEnd:   GenerarYMostrar("ronda terminada");        break;
-            case GameStateManager.GameState.Stealing:   GenerarYMostrar("robo de puntos");         break;
-            case GameStateManager.GameState.GameOver:   GenerarYMostrar("ganador del juego");      break;
+            case GameStateManager.GameState.Intro:           GenerarBienvenida();                         break;
+            case GameStateManager.GameState.Countdown:       GenerarYMostrar("nueva ronda comenzando");   break;
+            case GameStateManager.GameState.WaitingForBuzzer: GenerarYMostrar("quien toca el buzzer primero"); break;
+            case GameStateManager.GameState.RoundEnd:        GenerarYMostrar("ronda terminada");          break;
+            case GameStateManager.GameState.Stealing:        GenerarYMostrar("robo de puntos");           break;
+            case GameStateManager.GameState.GameOver:        GenerarYMostrar("ganador del juego");        break;
         }
+    }
+
+    private void GenerarBienvenida()
+    {
+        if (_generandoComentario) { Debug.Log("[AnimadorIA] GenerarBienvenida: ya generando, skip"); return; }
+        _generandoComentario = true;
+
+        var gsm = GameStateManager.Instance;
+        string equipoA = gsm != null ? gsm.NombreEquipoA.ToString() : "A";
+        string equipoB = gsm != null ? gsm.NombreEquipoB.ToString() : "B";
+        string liderA  = gsm != null ? gsm.GetLiderNombre(1) : "Jugador";
+        string liderB  = gsm != null ? gsm.GetLiderNombre(2) : "Jugador";
+
+        // Mostrar mensaje inmediato mientras el LLM procesa
+        string mensajeInmediato =
+            $"¡Bienvenidos a los 100 Chilenos Dicen! " +
+            $"Hoy {equipoA} vs {equipoB}. " +
+            $"¡{liderA} y {liderB} al podio!";
+        if (gsm != null) gsm.ActualizarMensajeAnimador(mensajeInmediato);
+        Debug.Log($"[AnimadorIA] GenerarBienvenida START — OllamaService={(OllamaService.Instance != null ? "OK" : "NULL")}");
+
+        if (OllamaService.Instance == null)
+        {
+            _generandoComentario = false;
+            return;
+        }
+
+        string contexto = $"bienvenida al programa, " +
+                          $"equipo {equipoA} con lider {liderA} " +
+                          $"vs equipo {equipoB} con lider {liderB}, " +
+                          $"invita a los lideres al podio";
+
+        OllamaService.Instance.GenerarBienvenida(contexto, mensaje =>
+        {
+            Debug.Log($"[AnimadorIA] GenerarBienvenida CALLBACK → '{mensaje}'");
+            if (GameStateManager.Instance != null && !string.IsNullOrEmpty(mensaje))
+                GameStateManager.Instance.ActualizarMensajeAnimador(mensaje);
+            _generandoComentario = false;
+        });
     }
 
     private void GenerarYMostrar(string contexto)
@@ -55,14 +96,10 @@ public class AnimadorIA : MonoBehaviour
 
         OllamaService.Instance.GenerarComentario(contexto, mensaje =>
         {
-            // Escribir en la propiedad [Networked] de GameStateManager —
-            // Fusion la replica automáticamente a todos los clientes.
+            // Usar ActualizarMensajeAnimador para garantizar que el ChangeDetector
+            // detecte el cambio aunque el texto sea igual al anterior (_mensajeVersion++)
             if (GameStateManager.Instance != null && !string.IsNullOrEmpty(mensaje))
-            {
-                GameStateManager.Instance.MensajeAnimador = mensaje.Length > 510
-                    ? mensaje.Substring(0, 510)
-                    : mensaje;
-            }
+                GameStateManager.Instance.ActualizarMensajeAnimador(mensaje);
             _generandoComentario = false;
         });
     }

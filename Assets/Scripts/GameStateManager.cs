@@ -22,7 +22,7 @@ public class GameStateManager : NetworkBehaviour
 
     public enum GameState
     {
-        WaitingForPlayers, Countdown, WaitingForBuzzer, TypingAnswer, Playing, Stealing, RoundEnd, GameOver
+        WaitingForPlayers, Intro, Countdown, WaitingForBuzzer, TypingAnswer, Playing, Stealing, RoundEnd, GameOver
     }
 
     [Header("Base de Datos de Preguntas")]
@@ -75,6 +75,8 @@ public class GameStateManager : NetworkBehaviour
 
     // Mensaje del animador — sincronizado automáticamente a todos los clientes
     [Networked] public NetworkString<_512> MensajeAnimador { get; set; }
+    // Contador de versión: fuerza detección de cambio aunque el mensaje sea igual al anterior
+    [Networked] private int _mensajeVersion { get; set; }
 
     // Pregunta actual sincronizada — los clientes leen de aquí en vez de _preguntasDinamicas
     [Networked] private NetworkString<_256> _netPregunta   { get; set; }
@@ -151,9 +153,16 @@ public class GameStateManager : NetworkBehaviour
     {
         if (Object.HasStateAuthority)
         {
+            if (CurrentState == GameState.Intro && Timer.Expired(Runner))
+            {
+                Timer = TickTimer.None;
+                CurrentState = GameState.Countdown;
+                Timer = TickTimer.CreateFromSeconds(Runner, 5.0f);
+            }
+
             if (CurrentState == GameState.Countdown && Timer.Expired(Runner))
             {
-                Timer = TickTimer.None; 
+                Timer = TickTimer.None;
                 CurrentState = GameState.WaitingForBuzzer;
             }
 
@@ -202,9 +211,9 @@ public class GameStateManager : NetworkBehaviour
                         OnStateChangedEvent?.Invoke(CurrentState);
                     break;
 
-                case nameof(MensajeAnimador):
+                case nameof(_mensajeVersion):
                     string msg = MensajeAnimador.ToString();
-                    Debug.Log($"[GSM] MensajeAnimador cambió → '{msg}' (IsServer={Runner.IsServer})");
+                    Debug.Log($"[GSM] MensajeAnimador v{_mensajeVersion} → '{msg}' (IsServer={Runner.IsServer})");
                     if (!string.IsNullOrEmpty(msg))
                         AnimadorIA.NotifyMensaje(msg);
                     break;
@@ -212,6 +221,37 @@ public class GameStateManager : NetworkBehaviour
         }
     }
     
+    // ─── Helpers públicos ────────────────────────────────────────────
+
+    // Devuelve el nombre del jugador con SeatIndex 0 en el equipo indicado (el líder del podio)
+    public string GetLiderNombre(int teamIndex)
+    {
+        foreach (var pRef in Runner.ActivePlayers)
+        {
+            var data = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>();
+            if (data != null && data.TeamIndex == teamIndex && data.SeatIndex == 0)
+                return data.PlayerName.ToString();
+        }
+        return "Jugador";
+    }
+
+    // ─── Animador IA ─────────────────────────────────────────────────
+
+    // Usar este método en lugar de asignar MensajeAnimador directamente.
+    // El contador _mensajeVersion garantiza que Render() detecte el cambio
+    // incluso si el texto es idéntico al mensaje anterior.
+    public void ActualizarMensajeAnimador(string mensaje)
+    {
+        if (!Object.HasStateAuthority)
+        {
+            Debug.LogWarning("[GSM] ActualizarMensajeAnimador llamado sin StateAuthority — ignorado");
+            return;
+        }
+        MensajeAnimador = mensaje.Length > 510 ? mensaje.Substring(0, 510) : mensaje;
+        _mensajeVersion++;
+        Debug.Log($"[GSM] ActualizarMensajeAnimador v{_mensajeVersion} → '{MensajeAnimador}'");
+    }
+
     // ─── Preguntas dinámicas (IA) ──────────────────────────────────
 
     // Escribe la pregunta actual en las propiedades [Networked] para que todos los
@@ -268,8 +308,9 @@ public class GameStateManager : NetworkBehaviour
         // Escribir pregunta actual en [Networked] — llega a todos en el mismo snapshot
         SincronizarPreguntaActual();
 
-        CurrentState = GameState.Countdown;
-        Timer = TickTimer.CreateFromSeconds(Runner, 5.0f);
+        // Intro: jugadores en mesas, animador presenta equipos (13s antes del countdown)
+        CurrentState = GameState.Intro;
+        Timer = TickTimer.CreateFromSeconds(Runner, 13.0f);
     }
 
     public void RegisterCorrectAnswer(int points)
