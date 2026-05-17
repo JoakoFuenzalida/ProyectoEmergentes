@@ -78,6 +78,11 @@ public class GameStateManager : NetworkBehaviour
     // Contador de versión: fuerza detección de cambio aunque el mensaje sea igual al anterior
     [Networked] private int _mensajeVersion { get; set; }
 
+    // ── Conductor dinámico: respuestas y resultados ──────────────────
+    [Networked] public NetworkString<_64> PendingAnswerText  { get; set; }
+    [Networked] public int                PendingResultPoints { get; set; }
+    [Networked] private int               _answerResultVersion { get; set; }
+
     // Pregunta actual sincronizada — los clientes leen de aquí en vez de _preguntasDinamicas
     [Networked] private NetworkString<_256> _netPregunta   { get; set; }
     [Networked] private NetworkString<_512> _netRespuestas { get; set; }
@@ -90,7 +95,9 @@ public class GameStateManager : NetworkBehaviour
     public static event Action OnTemporaryStrikeEvent; 
     public static event Action<bool> OnEvaluationStateChangedEvent;
     
-    public static event Action OnTeamNamesUpdatedEvent; 
+    public static event Action OnTeamNamesUpdatedEvent;
+    // correct, points, playerName, teamName
+    public static event Action<bool, int, string, string> OnAnswerResultEvent;
 
     private ChangeDetector _changes;
 
@@ -217,6 +224,15 @@ public class GameStateManager : NetworkBehaviour
                     if (!string.IsNullOrEmpty(msg))
                         AnimadorIA.NotifyMensaje(msg);
                     break;
+
+                case nameof(_answerResultVersion):
+                {
+                    var pd    = Runner?.GetPlayerObject(PlayerRef.FromIndex(PendingPlayerId))?.GetComponent<PlayerNetworkData>();
+                    string pN = pd?.PlayerName.ToString() ?? "Jugador";
+                    string tN = ActiveTeam.ToString() == "A" ? NombreEquipoA.ToString() : NombreEquipoB.ToString();
+                    OnAnswerResultEvent?.Invoke(PendingIsCorrect, PendingResultPoints, pN, tN);
+                    break;
+                }
             }
         }
     }
@@ -412,9 +428,21 @@ public class GameStateManager : NetworkBehaviour
             if (isCorrect) break;
         }
 
-        PendingIsCorrect  = isCorrect;
-        PendingAnswerIndex = answerIndex;
-        PendingPlayerId   = playerId;
+        PendingIsCorrect   = isCorrect;
+        PendingAnswerIndex  = answerIndex;
+        PendingPlayerId    = playerId;
+
+        // ── Mensaje de suspenso del conductor ─────────────────────
+        PendingAnswerText = answer.Length > 63 ? answer.Substring(0, 63) : answer;
+        string[] frasesSuspenso = {
+            $"«{answer}»...\n¿Estará correcta?\n¡DÁMELA!",
+            $"Dice «{answer}»...\n¡Veamos si acierta!",
+            $"«{answer}»...\n¡Momento de la verdad!"
+        };
+        // Hash determinista para que todos los clientes elijan la misma frase
+        int fi = (int)((uint)(answer.GetHashCode() + playerId) % (uint)frasesSuspenso.Length);
+        ActualizarMensajeAnimador(frasesSuspenso[fi]);
+
         IsEvaluating      = true;
         EvaluationTimer   = TickTimer.CreateFromSeconds(Runner, 1.5f);
     }
@@ -426,6 +454,15 @@ public class GameStateManager : NetworkBehaviour
 
     private void ApplyAnswerResult(bool isCorrect, int answerIndex, int playerId)
     {
+        // ── Resultado del conductor (mensaje inmediato + evento para LLM) ──
+        int rPts = (isCorrect && answerIndex >= 0 && BancoActivo != null
+                    && answerIndex < BancoActivo[CurrentQuestionIndex].Puntos.Length)
+                    ? BancoActivo[CurrentQuestionIndex].Puntos[answerIndex] : 0;
+        PendingResultPoints = rPts;
+        string msgResult = isCorrect ? $"¡CORRECTO!\n+{rPts} puntos!" : "¡Incorrecto!\n¡X roja!";
+        ActualizarMensajeAnimador(msgResult);
+        _answerResultVersion++;
+
         // ==========================================
         // 1. FASE DE PODIO (Validamos con BuzzerWinnerId)
         // ==========================================

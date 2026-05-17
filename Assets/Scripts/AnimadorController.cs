@@ -1,6 +1,7 @@
 using System.Collections;
 using UnityEngine;
 using TMPro;
+using Fusion;
 
 public class AnimadorController : MonoBehaviour
 {
@@ -21,14 +22,14 @@ public class AnimadorController : MonoBehaviour
     [SerializeField] private TMP_Text   textoEquipoB;
 
     [Header("Tiempos")]
-    [SerializeField] private float duracionViñeta    = 10f; // para mensajes normales de juego
-    [SerializeField] private float duracionPagina    = 3.8f; // tiempo por página en el intro
+    [SerializeField] private float duracionViñeta    = 9f;  // mensajes normales de juego
+    [SerializeField] private float duracionPagina    = 3.8f; // tiempo por página en intro
     [SerializeField] private float pausaEntrePaginas = 0.4f; // pausa breve entre páginas
 
     private Animator  _animator;
     private Coroutine _viñetaCoroutine;
-    private bool      _enPodio       = false;
-    private bool      _introActiva   = false; // bloquea mensajes externos durante el intro
+    private bool      _enPodio         = false;
+    private bool      _secuenciaActiva = false; // bloquea mensajes externos durante intro/countdown
 
     private void Awake()
     {
@@ -55,20 +56,13 @@ public class AnimadorController : MonoBehaviour
         AnimadorIA.OnMensajeChanged           -= OnMensajeIA;
     }
 
-    // ─── Teleport según estado ───────────────────────────────────────
+    // ─── Teleport y reacciones según estado ──────────────────────────
 
     private void HandleEstadoJuego(GameStateManager.GameState estado)
     {
         switch (estado)
         {
-            case GameStateManager.GameState.WaitingForBuzzer:
-            case GameStateManager.GameState.TypingAnswer:
-                _enPodio = true;
-                TeleportarA(posPodio);
-                Ocultar(viñetaEquipoA);
-                Ocultar(viñetaEquipoB);
-                break;
-
+            // ── Mesas / Estudio ──────────────────────────────
             case GameStateManager.GameState.Intro:
                 _enPodio = false;
                 TeleportarA(posEstudio);
@@ -77,11 +71,11 @@ public class AnimadorController : MonoBehaviour
                 break;
 
             case GameStateManager.GameState.Countdown:
-                // Detener intro si aún estaba corriendo
-                _introActiva = false;
+                _secuenciaActiva = false; // cierra intro si estaba corriendo
                 _enPodio = false;
                 TeleportarA(posEstudio);
                 DetenerViñeta();
+                IniciarCountdown();
                 break;
 
             case GameStateManager.GameState.Playing:
@@ -91,6 +85,22 @@ public class AnimadorController : MonoBehaviour
                 _enPodio = false;
                 TeleportarA(posEstudio);
                 Ocultar(viñetaPodio);
+                break;
+
+            // ── Podio ────────────────────────────────────────
+            case GameStateManager.GameState.WaitingForBuzzer:
+                _enPodio = true;
+                TeleportarA(posPodio);
+                Ocultar(viñetaEquipoA);
+                Ocultar(viñetaEquipoB);
+                break;
+
+            case GameStateManager.GameState.TypingAnswer:
+                _enPodio = true;
+                TeleportarA(posPodio);
+                Ocultar(viñetaEquipoA);
+                Ocultar(viñetaEquipoB);
+                MostrarBuzzerWinner();
                 break;
         }
     }
@@ -112,80 +122,77 @@ public class AnimadorController : MonoBehaviour
 
     private IEnumerator SecuenciaIntro()
     {
-        _introActiva = true;
+        _secuenciaActiva = true;
 
-        var gsm = GameStateManager.Instance;
-        string eqA    = gsm != null ? gsm.NombreEquipoA.ToString() : "Equipo A";
-        string eqB    = gsm != null ? gsm.NombreEquipoB.ToString() : "Equipo B";
-        string liderA = gsm != null ? gsm.GetLiderNombre(1) : "Lider A";
-        string liderB = gsm != null ? gsm.GetLiderNombre(2) : "Lider B";
+        var gsm    = GameStateManager.Instance;
+        string eqA = gsm != null ? gsm.NombreEquipoA.ToString() : "Equipo A";
+        string eqB = gsm != null ? gsm.NombreEquipoB.ToString() : "Equipo B";
+        string lA  = gsm != null ? gsm.GetLiderNombre(1) : "Lider A";
+        string lB  = gsm != null ? gsm.GetLiderNombre(2) : "Lider B";
 
-        // Página 1 — presentación
-        yield return StartCoroutine(Pagina(
-            "¡Hola a todos!\nSoy Martín Cárcamo,\nsu presentador de hoy.", 4f));
-
-        // Página 2 — nombre del programa
-        yield return StartCoroutine(Pagina(
-            "¡Bienvenidos a\n¿Qué Dice Chile?\nVersión Informática!", 4f));
-
-        // Página 3 — equipos
-        yield return StartCoroutine(Pagina(
-            $"Hoy se enfrentan:\n{eqA}\nvs {eqB}", 3.8f));
-
-        // Página 4 — cómo funcionan las preguntas
-        yield return StartCoroutine(Pagina(
-            "Haré preguntas como:\n'¿Qué dirían 100 informáticos\nde la PUCV sobre...?'", 4.5f));
-
-        // Página 5 — objetivo
-        yield return StartCoroutine(Pagina(
-            "¡Deben adivinar las\nrespuestas más populares\nde nuestra encuesta!", 3.8f));
-
-        // Página 6 — turnos
-        yield return StartCoroutine(Pagina(
-            "El juego es por turnos.\nCada equipo responde\ncuando le corresponde.", 3.8f));
-
-        // Página 7 — buzzer
-        yield return StartCoroutine(Pagina(
-            "En el podio, el primero\nen presionar ESPACIO\nresponde la pregunta.", 4f));
-
-        // Página 8 — llamada al podio
-        yield return StartCoroutine(Pagina(
-            $"{liderA} y {liderB},\n¡al podio!\n¡Que comience el juego!", 4f));
+        yield return StartCoroutine(Pagina("¡Hola a todos!\nSoy Martín Cárcamo,\nsu presentador de hoy.", 4f));
+        yield return StartCoroutine(Pagina("¡Bienvenidos a\n¿Qué Dice Chile?\nVersión Informática!", 4f));
+        yield return StartCoroutine(Pagina($"Hoy se enfrentan:\n{eqA}\nvs {eqB}", 3.8f));
+        yield return StartCoroutine(Pagina("Haré preguntas como:\n'¿Qué dirían 100 informáticos\nde la PUCV sobre...?'", 4.5f));
+        yield return StartCoroutine(Pagina("¡Deben adivinar las\nrespuestas más populares\nde nuestra encuesta!", 3.8f));
+        yield return StartCoroutine(Pagina("El juego es por turnos.\nCada equipo responde\ncuando le corresponde.", 3.8f));
+        yield return StartCoroutine(Pagina("En el podio, el primero\nen presionar ESPACIO\nresponde la pregunta.", 4f));
+        yield return StartCoroutine(Pagina($"{lA} y {lB},\n¡al podio!\n¡Que comience el juego!", 4f));
 
         OcultarTodas();
         SetHablando(false);
-        _introActiva = false;
+        _secuenciaActiva = false;
     }
 
-    // Muestra una página, espera que se lea y hace una pausa breve antes de la siguiente
-    private IEnumerator Pagina(string texto, float duracion)
+    // ─── Anuncio de ronda en Countdown ───────────────────────────────
+
+    private void IniciarCountdown()
     {
-        // Mostrar en viñetas de estudio (siempre en intro)
-        Activar(viñetaEquipoA, textoEquipoA, texto);
-        Activar(viñetaEquipoB, textoEquipoB, texto);
-        Ocultar(viñetaPodio);
+        if (_viñetaCoroutine != null) StopCoroutine(_viñetaCoroutine);
+        _viñetaCoroutine = StartCoroutine(CoroutineCountdown());
+    }
 
-        // Sincronizar panel 2D del animador
-        UIGameController.Instance?.ActualizarTextoAnimador(texto);
+    private IEnumerator CoroutineCountdown()
+    {
+        _secuenciaActiva = true;
 
-        SetHablando(true);
-        yield return new WaitForSeconds(duracion);
+        var gsm  = GameStateManager.Instance;
+        int ronda = gsm != null ? gsm.CurrentRound : 1;
+
+        yield return StartCoroutine(Pagina(
+            $"¡Ronda {ronda}!\nLean la pregunta arriba.\n¡Prepárense para el buzzer!", 4f));
 
         OcultarTodas();
         SetHablando(false);
-        yield return new WaitForSeconds(pausaEntrePaginas);
+        _secuenciaActiva = false;
     }
 
-    // ─── Mensajes normales del juego (vía AnimadorIA) ────────────────
+    // ─── Buzzer winner ────────────────────────────────────────────────
 
-    // Solo se ejecuta si el intro ya terminó
+    private void MostrarBuzzerWinner()
+    {
+        var gsm = GameStateManager.Instance;
+        if (gsm == null) return;
+
+        var data = gsm.Runner
+            ?.GetPlayerObject(PlayerRef.FromIndex(gsm.BuzzerWinnerId))
+            ?.GetComponent<PlayerNetworkData>();
+
+        string playerName = data?.PlayerName.ToString() ?? "Jugador";
+        string msg = $"¡{playerName} tiene el buzzer!\n¡Escribe tu respuesta!";
+
+        if (_viñetaCoroutine != null) StopCoroutine(_viñetaCoroutine);
+        _viñetaCoroutine = StartCoroutine(CoroutineViñetaNormal(msg));
+        UIGameController.Instance?.ActualizarTextoAnimador(msg);
+    }
+
+    // ─── Mensajes del juego llegados via AnimadorIA ───────────────────
+
     private void OnMensajeIA(string mensaje)
     {
-        if (_introActiva) return;
+        if (_secuenciaActiva) return; // no interrumpir intro ni countdown
         if (_viñetaCoroutine != null) StopCoroutine(_viñetaCoroutine);
         _viñetaCoroutine = StartCoroutine(CoroutineViñetaNormal(mensaje));
-
-        // Sincronizar panel 2D
         UIGameController.Instance?.ActualizarTextoAnimador(mensaje);
     }
 
@@ -203,12 +210,25 @@ public class AnimadorController : MonoBehaviour
             Activar(viñetaEquipoB, textoEquipoB, mensaje);
             Ocultar(viñetaPodio);
         }
-
         SetHablando(true);
         yield return new WaitForSeconds(duracionViñeta);
-
         OcultarTodas();
         SetHablando(false);
+    }
+
+    // ─── Página individual (intro y countdown) ───────────────────────
+
+    private IEnumerator Pagina(string texto, float duracion)
+    {
+        Activar(viñetaEquipoA, textoEquipoA, texto);
+        Activar(viñetaEquipoB, textoEquipoB, texto);
+        Ocultar(viñetaPodio);
+        UIGameController.Instance?.ActualizarTextoAnimador(texto);
+        SetHablando(true);
+        yield return new WaitForSeconds(duracion);
+        OcultarTodas();
+        SetHablando(false);
+        yield return new WaitForSeconds(pausaEntrePaginas);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────

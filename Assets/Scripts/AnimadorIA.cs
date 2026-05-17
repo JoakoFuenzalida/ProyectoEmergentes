@@ -1,9 +1,6 @@
 using System;
 using UnityEngine;
 
-// AnimadorIA: MonoBehaviour simple.
-// El mensaje se sincroniza via GameStateManager.MensajeAnimador ([Networked]),
-// que Fusion entrega automáticamente a todos los clientes.
 public class AnimadorIA : MonoBehaviour
 {
     public static AnimadorIA Instance { get; private set; }
@@ -19,40 +16,133 @@ public class AnimadorIA : MonoBehaviour
         Instance = this;
     }
 
-    private void OnEnable()  => GameStateManager.OnStateChangedEvent += HandleStateChanged;
-    private void OnDisable() => GameStateManager.OnStateChangedEvent -= HandleStateChanged;
-
-    // Llamado por GameStateManager.OnMensajeAnimadorChanged en TODOS los clientes
-    public static void NotifyMensaje(string mensaje)
+    private void OnEnable()
     {
-        Debug.Log($"[AnimadorIA] NotifyMensaje → '{mensaje}' | suscriptores={OnMensajeChanged?.GetInvocationList()?.Length ?? 0}");
-        OnMensajeChanged?.Invoke(mensaje);
+        GameStateManager.OnStateChangedEvent   += HandleStateChanged;
+        GameStateManager.OnAnswerResultEvent   += HandleAnswerResult;
+        TurnManager.OnTurnChangedEvent         += HandleTurnChanged;
     }
 
-    // Llamado por GameStateManager cuando inicia/termina la generación de preguntas
+    private void OnDisable()
+    {
+        GameStateManager.OnStateChangedEvent   -= HandleStateChanged;
+        GameStateManager.OnAnswerResultEvent   -= HandleAnswerResult;
+        TurnManager.OnTurnChangedEvent         -= HandleTurnChanged;
+    }
+
+    // ─── API pública ─────────────────────────────────────────────────
+
+    public static void NotifyMensaje(string mensaje)   => OnMensajeChanged?.Invoke(mensaje);
     public static void NotifyGenerating(bool generando) => OnGenerandoPreguntas?.Invoke(generando);
 
-    // ─── Comentarios reactivos (solo host) ────────────────────────
+    // ─── Estado del juego (solo host, vía LLM) ───────────────────────
 
     private void HandleStateChanged(GameStateManager.GameState estado)
     {
         if (GameStateManager.Instance == null || !GameStateManager.Instance.Object.HasStateAuthority) return;
         if (!GameStateManager.Instance.IsGameStarted) return;
 
+        var gsm = GameStateManager.Instance;
+
         switch (estado)
         {
-            case GameStateManager.GameState.Intro:           GenerarBienvenida();                         break;
-            case GameStateManager.GameState.Countdown:       GenerarYMostrar("nueva ronda comenzando");   break;
-            case GameStateManager.GameState.WaitingForBuzzer: GenerarYMostrar("quien toca el buzzer primero"); break;
-            case GameStateManager.GameState.RoundEnd:        GenerarYMostrar("ronda terminada");          break;
-            case GameStateManager.GameState.Stealing:        GenerarYMostrar("robo de puntos");           break;
-            case GameStateManager.GameState.GameOver:        GenerarYMostrar("ganador del juego");        break;
+            case GameStateManager.GameState.Intro:
+                GenerarBienvenida();
+                break;
+
+            case GameStateManager.GameState.Countdown:
+                GenerarYMostrar(
+                    $"ronda {gsm.CurrentRound} de {5}, " +
+                    $"lean bien la pregunta que ya esta arriba, preparense");
+                break;
+
+            case GameStateManager.GameState.WaitingForBuzzer:
+                GenerarYMostrar("quien sera el primero en tocar el buzzer presionando espacio");
+                break;
+
+            case GameStateManager.GameState.Stealing:
+            {
+                string robando = gsm.ActiveTeam.ToString() == "A"
+                    ? gsm.NombreEquipoA.ToString() : gsm.NombreEquipoB.ToString();
+                GenerarYMostrar(
+                    $"el equipo {robando} tiene una sola oportunidad para robar " +
+                    $"todos los puntos de la ronda");
+                break;
+            }
+
+            case GameStateManager.GameState.RoundEnd:
+                GenerarYMostrar(
+                    $"fin de ronda {gsm.CurrentRound}, " +
+                    $"{gsm.NombreEquipoA}: {gsm.ScoreA} puntos, " +
+                    $"{gsm.NombreEquipoB}: {gsm.ScoreB} puntos");
+                break;
+
+            case GameStateManager.GameState.GameOver:
+            {
+                string ganador = gsm.ScoreA >= gsm.ScoreB
+                    ? gsm.NombreEquipoA.ToString() : gsm.NombreEquipoB.ToString();
+                int pts = Mathf.Max(gsm.ScoreA, gsm.ScoreB);
+                GenerarYMostrar(
+                    $"fin del juego, {ganador} gano con {pts} puntos totales, " +
+                    $"felicitar al equipo ganador");
+                break;
+            }
         }
     }
 
+    // ─── Resultado de respuesta (todos los clientes) ─────────────────
+
+    // La frase inmediata ya la pone GameStateManager vía ActualizarMensajeAnimador.
+    // Aquí generamos el comentario extendido del LLM (solo host).
+    private void HandleAnswerResult(bool correct, int points, string playerName, string teamName)
+    {
+        if (GameStateManager.Instance == null || !GameStateManager.Instance.IsGameStarted) return;
+        if (!GameStateManager.Instance.Object.HasStateAuthority) return;
+
+        var gsm = GameStateManager.Instance;
+        string contexto = correct
+            ? $"respuesta correcta de {playerName}, gana {points} puntos para {teamName}, " +
+              $"marcador {gsm.NombreEquipoA}: {gsm.ScoreA + (gsm.ActiveTeam.ToString() == "A" ? gsm.RoundScore : 0)}" +
+              $" vs {gsm.NombreEquipoB}: {gsm.ScoreB + (gsm.ActiveTeam.ToString() == "B" ? gsm.RoundScore : 0)}"
+            : $"respuesta incorrecta de {playerName} del equipo {teamName}, sale la X roja en el tablero";
+
+        GenerarYMostrar(contexto);
+    }
+
+    // ─── Cambio de turno (todos los clientes, hardcoded sin LLM) ─────
+
+    private void HandleTurnChanged(PlayerRef player)
+    {
+        if (GameStateManager.Instance == null || !GameStateManager.Instance.IsGameStarted) return;
+        var state = GameStateManager.Instance.CurrentState;
+        if (state != GameStateManager.GameState.Playing &&
+            state != GameStateManager.GameState.Stealing) return;
+        if (player == PlayerRef.None) return;
+
+        var data = GameStateManager.Instance.Runner
+            ?.GetPlayerObject(player)?.GetComponent<PlayerNetworkData>();
+        if (data == null) return;
+
+        string playerName = data.PlayerName.ToString();
+        string teamName   = data.TeamIndex == 1
+            ? GameStateManager.Instance.NombreEquipoA.ToString()
+            : GameStateManager.Instance.NombreEquipoB.ToString();
+
+        string[] frases = {
+            $"¡Turno de {playerName}!\n¿Cuál es tu respuesta?",
+            $"¡{playerName}, es tu momento!\n¡Dame una respuesta!",
+            $"¡Vamos {playerName}!\n¿Qué dice {teamName}?"
+        };
+        // Determinista para todos los clientes
+        int idx = (int)((uint)player.PlayerId % (uint)frases.Length);
+        NotifyMensaje(frases[idx]);
+    }
+
+    // ─── LLM helpers ────────────────────────────────────────────────
+
     private void GenerarBienvenida()
     {
-        if (_generandoComentario) { Debug.Log("[AnimadorIA] GenerarBienvenida: ya generando, skip"); return; }
+        if (_generandoComentario) return;
         _generandoComentario = true;
 
         var gsm = GameStateManager.Instance;
@@ -61,28 +151,13 @@ public class AnimadorIA : MonoBehaviour
         string liderA  = gsm != null ? gsm.GetLiderNombre(1) : "Jugador";
         string liderB  = gsm != null ? gsm.GetLiderNombre(2) : "Jugador";
 
-        // Mostrar mensaje inmediato mientras el LLM procesa
-        string mensajeInmediato =
-            $"¡Bienvenidos a los 100 Chilenos Dicen! " +
-            $"Hoy {equipoA} vs {equipoB}. " +
-            $"¡{liderA} y {liderB} al podio!";
-        if (gsm != null) gsm.ActualizarMensajeAnimador(mensajeInmediato);
-        Debug.Log($"[AnimadorIA] GenerarBienvenida START — OllamaService={(OllamaService.Instance != null ? "OK" : "NULL")}");
+        if (OllamaService.Instance == null) { _generandoComentario = false; return; }
 
-        if (OllamaService.Instance == null)
-        {
-            _generandoComentario = false;
-            return;
-        }
-
-        string contexto = $"bienvenida al programa, " +
-                          $"equipo {equipoA} con lider {liderA} " +
-                          $"vs equipo {equipoB} con lider {liderB}, " +
-                          $"invita a los lideres al podio";
+        string contexto = $"bienvenida al programa, equipo {equipoA} con lider {liderA} " +
+                          $"vs equipo {equipoB} con lider {liderB}, invita a los lideres al podio";
 
         OllamaService.Instance.GenerarBienvenida(contexto, mensaje =>
         {
-            Debug.Log($"[AnimadorIA] GenerarBienvenida CALLBACK → '{mensaje}'");
             if (GameStateManager.Instance != null && !string.IsNullOrEmpty(mensaje))
                 GameStateManager.Instance.ActualizarMensajeAnimador(mensaje);
             _generandoComentario = false;
@@ -96,8 +171,6 @@ public class AnimadorIA : MonoBehaviour
 
         OllamaService.Instance.GenerarComentario(contexto, mensaje =>
         {
-            // Usar ActualizarMensajeAnimador para garantizar que el ChangeDetector
-            // detecte el cambio aunque el texto sea igual al anterior (_mensajeVersion++)
             if (GameStateManager.Instance != null && !string.IsNullOrEmpty(mensaje))
                 GameStateManager.Instance.ActualizarMensajeAnimador(mensaje);
             _generandoComentario = false;
