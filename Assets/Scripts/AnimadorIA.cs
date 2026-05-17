@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using Fusion;
 
 public class AnimadorIA : MonoBehaviour
 {
