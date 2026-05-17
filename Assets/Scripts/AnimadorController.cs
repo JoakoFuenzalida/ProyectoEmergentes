@@ -20,11 +20,15 @@ public class AnimadorController : MonoBehaviour
     [SerializeField] private GameObject viñetaEquipoB;
     [SerializeField] private TMP_Text   textoEquipoB;
 
-    [SerializeField] private float duracionViñeta = 12f;
+    [Header("Tiempos")]
+    [SerializeField] private float duracionViñeta    = 10f; // para mensajes normales de juego
+    [SerializeField] private float duracionPagina    = 3.8f; // tiempo por página en el intro
+    [SerializeField] private float pausaEntrePaginas = 0.4f; // pausa breve entre páginas
 
     private Animator  _animator;
     private Coroutine _viñetaCoroutine;
-    private bool      _enPodio = false;
+    private bool      _enPodio       = false;
+    private bool      _introActiva   = false; // bloquea mensajes externos durante el intro
 
     private void Awake()
     {
@@ -35,25 +39,23 @@ public class AnimadorController : MonoBehaviour
 
     private void Start()
     {
-        Ocultar(viñetaPodio);
-        Ocultar(viñetaEquipoA);
-        Ocultar(viñetaEquipoB);
+        OcultarTodas();
         TeleportarA(posEstudio);
     }
 
     private void OnEnable()
     {
         GameStateManager.OnStateChangedEvent += HandleEstadoJuego;
-        AnimadorIA.OnMensajeChanged           += MostrarViñeta;
+        AnimadorIA.OnMensajeChanged           += OnMensajeIA;
     }
 
     private void OnDisable()
     {
         GameStateManager.OnStateChangedEvent -= HandleEstadoJuego;
-        AnimadorIA.OnMensajeChanged           -= MostrarViñeta;
+        AnimadorIA.OnMensajeChanged           -= OnMensajeIA;
     }
 
-    // ─── Teleport según estado ───────────────────────────────────
+    // ─── Teleport según estado ───────────────────────────────────────
 
     private void HandleEstadoJuego(GameStateManager.GameState estado)
     {
@@ -71,10 +73,17 @@ public class AnimadorController : MonoBehaviour
                 _enPodio = false;
                 TeleportarA(posEstudio);
                 Ocultar(viñetaPodio);
-                MostrarViñetaIntro();
+                IniciarSecuenciaIntro();
                 break;
 
             case GameStateManager.GameState.Countdown:
+                // Detener intro si aún estaba corriendo
+                _introActiva = false;
+                _enPodio = false;
+                TeleportarA(posEstudio);
+                DetenerViñeta();
+                break;
+
             case GameStateManager.GameState.Playing:
             case GameStateManager.GameState.Stealing:
             case GameStateManager.GameState.RoundEnd:
@@ -86,24 +95,6 @@ public class AnimadorController : MonoBehaviour
         }
     }
 
-    private void MostrarViñetaIntro()
-    {
-        var gsm = GameStateManager.Instance;
-        if (gsm == null) return;
-
-        string equipoA = gsm.NombreEquipoA.ToString();
-        string equipoB = gsm.NombreEquipoB.ToString();
-        string liderA  = gsm.GetLiderNombre(1);
-        string liderB  = gsm.GetLiderNombre(2);
-
-        string mensaje =
-            $"¡Bienvenidos a los 100 Chilenos Dicen!\n" +
-            $"{equipoA} vs {equipoB}\n" +
-            $"¡{liderA} y {liderB} al podio!";
-
-        MostrarViñeta(mensaje);
-    }
-
     private void TeleportarA(Transform destino)
     {
         if (destino == null) return;
@@ -111,19 +102,94 @@ public class AnimadorController : MonoBehaviour
         transform.rotation = destino.rotation;
     }
 
-    // ─── Viñetas según posición ──────────────────────────────────
+    // ─── Secuencia paginada de intro ─────────────────────────────────
 
-    private void MostrarViñeta(string mensaje)
+    private void IniciarSecuenciaIntro()
     {
-        Debug.Log($"[AnimadorController] MostrarViñeta '{mensaje}' | enPodio={_enPodio} | " +
-                  $"viñetaPodio={viñetaPodio != null} textoPodio={textoPodio != null} | " +
-                  $"viñetaA={viñetaEquipoA != null} textoA={textoEquipoA != null} | " +
-                  $"viñetaB={viñetaEquipoB != null} textoB={textoEquipoB != null}");
         if (_viñetaCoroutine != null) StopCoroutine(_viñetaCoroutine);
-        _viñetaCoroutine = StartCoroutine(CoroutineViñeta(mensaje));
+        _viñetaCoroutine = StartCoroutine(SecuenciaIntro());
     }
 
-    private IEnumerator CoroutineViñeta(string mensaje)
+    private IEnumerator SecuenciaIntro()
+    {
+        _introActiva = true;
+
+        var gsm = GameStateManager.Instance;
+        string eqA    = gsm != null ? gsm.NombreEquipoA.ToString() : "Equipo A";
+        string eqB    = gsm != null ? gsm.NombreEquipoB.ToString() : "Equipo B";
+        string liderA = gsm != null ? gsm.GetLiderNombre(1) : "Lider A";
+        string liderB = gsm != null ? gsm.GetLiderNombre(2) : "Lider B";
+
+        // Página 1 — presentación
+        yield return StartCoroutine(Pagina(
+            "¡Hola a todos!\nSoy Martín Cárcamo,\nsu presentador de hoy.", 4f));
+
+        // Página 2 — nombre del programa
+        yield return StartCoroutine(Pagina(
+            "¡Bienvenidos a\n¿Qué Dice Chile?\nVersión Informática!", 4f));
+
+        // Página 3 — equipos
+        yield return StartCoroutine(Pagina(
+            $"Hoy se enfrentan:\n{eqA}\nvs {eqB}", 3.8f));
+
+        // Página 4 — cómo funcionan las preguntas
+        yield return StartCoroutine(Pagina(
+            "Haré preguntas como:\n'¿Qué dirían 100 informáticos\nde la PUCV sobre...?'", 4.5f));
+
+        // Página 5 — objetivo
+        yield return StartCoroutine(Pagina(
+            "¡Deben adivinar las\nrespuestas más populares\nde nuestra encuesta!", 3.8f));
+
+        // Página 6 — turnos
+        yield return StartCoroutine(Pagina(
+            "El juego es por turnos.\nCada equipo responde\ncuando le corresponde.", 3.8f));
+
+        // Página 7 — buzzer
+        yield return StartCoroutine(Pagina(
+            "En el podio, el primero\nen presionar ESPACIO\nresponde la pregunta.", 4f));
+
+        // Página 8 — llamada al podio
+        yield return StartCoroutine(Pagina(
+            $"{liderA} y {liderB},\n¡al podio!\n¡Que comience el juego!", 4f));
+
+        OcultarTodas();
+        SetHablando(false);
+        _introActiva = false;
+    }
+
+    // Muestra una página, espera que se lea y hace una pausa breve antes de la siguiente
+    private IEnumerator Pagina(string texto, float duracion)
+    {
+        // Mostrar en viñetas de estudio (siempre en intro)
+        Activar(viñetaEquipoA, textoEquipoA, texto);
+        Activar(viñetaEquipoB, textoEquipoB, texto);
+        Ocultar(viñetaPodio);
+
+        // Sincronizar panel 2D del animador
+        UIGameController.Instance?.ActualizarTextoAnimador(texto);
+
+        SetHablando(true);
+        yield return new WaitForSeconds(duracion);
+
+        OcultarTodas();
+        SetHablando(false);
+        yield return new WaitForSeconds(pausaEntrePaginas);
+    }
+
+    // ─── Mensajes normales del juego (vía AnimadorIA) ────────────────
+
+    // Solo se ejecuta si el intro ya terminó
+    private void OnMensajeIA(string mensaje)
+    {
+        if (_introActiva) return;
+        if (_viñetaCoroutine != null) StopCoroutine(_viñetaCoroutine);
+        _viñetaCoroutine = StartCoroutine(CoroutineViñetaNormal(mensaje));
+
+        // Sincronizar panel 2D
+        UIGameController.Instance?.ActualizarTextoAnimador(mensaje);
+    }
+
+    private IEnumerator CoroutineViñetaNormal(string mensaje)
     {
         if (_enPodio)
         {
@@ -138,14 +204,32 @@ public class AnimadorController : MonoBehaviour
             Ocultar(viñetaPodio);
         }
 
-        if (_animator != null) _animator.SetBool("Hablando", true);
-
+        SetHablando(true);
         yield return new WaitForSeconds(duracionViñeta);
 
+        OcultarTodas();
+        SetHablando(false);
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────
+
+    private void DetenerViñeta()
+    {
+        if (_viñetaCoroutine != null) { StopCoroutine(_viñetaCoroutine); _viñetaCoroutine = null; }
+        OcultarTodas();
+        SetHablando(false);
+    }
+
+    private void OcultarTodas()
+    {
         Ocultar(viñetaPodio);
         Ocultar(viñetaEquipoA);
         Ocultar(viñetaEquipoB);
-        if (_animator != null) _animator.SetBool("Hablando", false);
+    }
+
+    private void SetHablando(bool valor)
+    {
+        if (_animator != null) _animator.SetBool("Hablando", valor);
     }
 
     private void Activar(GameObject canvas, TMP_Text texto, string mensaje)

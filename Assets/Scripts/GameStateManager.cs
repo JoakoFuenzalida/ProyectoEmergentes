@@ -308,9 +308,9 @@ public class GameStateManager : NetworkBehaviour
         // Escribir pregunta actual en [Networked] — llega a todos en el mismo snapshot
         SincronizarPreguntaActual();
 
-        // Intro: jugadores en mesas, animador presenta equipos (13s antes del countdown)
+        // Intro: animador presenta el programa (35s cubre las 8 páginas de la secuencia)
         CurrentState = GameState.Intro;
-        Timer = TickTimer.CreateFromSeconds(Runner, 13.0f);
+        Timer = TickTimer.CreateFromSeconds(Runner, 35.0f);
     }
 
     public void RegisterCorrectAnswer(int points)

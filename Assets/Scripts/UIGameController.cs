@@ -144,6 +144,15 @@ public class UIGameController : MonoBehaviour
         StartCoroutine(nameof(LimpiarMensajeCoroutine));
     }
 
+    // Llamado directamente por AnimadorController (intro y mensajes del juego)
+    // para mantener panel 2D sincronizado con las viñetas 3D
+    public void ActualizarTextoAnimador(string mensaje)
+    {
+        if (textoAnimador != null) textoAnimador.text = mensaje;
+        if (panelAnimador != null && !panelAnimador.activeSelf)
+            panelAnimador.SetActive(true);
+    }
+
     // No oculta el panel — solo borra el texto después de un rato para
     // que el panel de Martín quede limpio esperando el siguiente comentario
     private IEnumerator LimpiarMensajeCoroutine()
