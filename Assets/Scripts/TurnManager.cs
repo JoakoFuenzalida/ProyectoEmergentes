@@ -124,6 +124,14 @@ public class TurnManager : NetworkBehaviour
         _teamTurnIndex[TeamAssigner.TEAM_B] = 0;
     }
 
+    public void SetTurnIndex(string team, int index)
+    {
+        if (!Object.HasStateAuthority) return;
+        bool isTeamB = team != null && team.Contains("B");
+        string safeTeamKey = isTeamB ? TeamAssigner.TEAM_B : TeamAssigner.TEAM_A;
+        _teamTurnIndex[safeTeamKey] = index;
+    }
+
     private void HandleStateChanged(GameStateManager.GameState newState)
     {
         if (!Object.HasStateAuthority) return;

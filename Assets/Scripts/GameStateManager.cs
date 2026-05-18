@@ -484,7 +484,8 @@ public class GameStateManager : NetworkBehaviour
 
                 if (TurnManager.Instance != null)
                 {
-                    TurnManager.Instance.ResetTurnIndices();
+                    int buzzerSeat = (pData != null) ? pData.SeatIndex : 0;
+                    TurnManager.Instance.SetTurnIndex(ActiveTeam.ToString(), buzzerSeat + 1);
                     TurnManager.Instance.AdvanceTurnInTeam(ActiveTeam.ToString());
                 }
             }
