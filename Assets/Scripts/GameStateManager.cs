@@ -72,6 +72,7 @@ public class GameStateManager : NetworkBehaviour
     [Networked] public NetworkBool PendingIsCorrect { get; set; }
     [Networked] public int PendingAnswerIndex { get; set; }
     [Networked] public int PendingPlayerId { get; set; }
+    [Networked] private PlayerRef PendingPlayerRef { get; set; }
 
     // Mensaje del animador — sincronizado automáticamente a todos los clientes
     [Networked] public NetworkString<_512> MensajeAnimador { get; set; }
@@ -437,6 +438,10 @@ public class GameStateManager : NetworkBehaviour
         PendingAnswerIndex  = answerIndex;
         PendingPlayerId    = playerId;
 
+        PendingPlayerRef = PlayerRef.None;
+        foreach (var pRef in Runner.ActivePlayers)
+            if (pRef.PlayerId == playerId) { PendingPlayerRef = pRef; break; }
+
         // ── Mensaje de suspenso del conductor ─────────────────────
         PendingAnswerText = answer.Length > 63 ? answer.Substring(0, 63) : answer;
         string[] frasesSuspenso = {
@@ -539,19 +544,19 @@ public class GameStateManager : NetworkBehaviour
         {
             bool esTurnoValido = TurnManager.Instance != null &&
                                  TurnManager.Instance.ActivePlayer != PlayerRef.None &&
-                                 TurnManager.Instance.ActivePlayer.PlayerId == playerId;
+                                 TurnManager.Instance.ActivePlayer == PendingPlayerRef;
 
             if (esTurnoValido)
             {
-                if (isCorrect) 
-                { 
-                    RevealedAnswersMask |= (1 << answerIndex); 
-                    RegisterCorrectAnswer(PuntosRespuestas[answerIndex]); 
-                    
-                    int allAnswersMask = (1 << RespuestasValidas.Length) - 1; 
-                    if (RevealedAnswersMask == allAnswersMask) 
+                if (isCorrect)
+                {
+                    RevealedAnswersMask |= (1 << answerIndex);
+                    RegisterCorrectAnswer(PuntosRespuestas[answerIndex]);
+
+                    int allAnswersMask = (1 << RespuestasValidas.Length) - 1;
+                    if (RevealedAnswersMask == allAnswersMask)
                     {
-                        AwardPointsToTeam(ActiveTeam.ToString(), RoundScore); 
+                        AwardPointsToTeam(ActiveTeam.ToString(), RoundScore);
                     }
                     else
                     {
@@ -559,14 +564,14 @@ public class GameStateManager : NetworkBehaviour
                         if (TurnManager.Instance != null) TurnManager.Instance.AdvanceTurnInTeam(ActiveTeam.ToString());
                     }
                 }
-                else 
+                else
                 {
                     // Esto registrará la X roja de los Strikes
                     RegisterWrongAnswer();
                 }
             }
         }
-        
+
         // ==========================================
         // 3. FASE DE ROBO (Validamos con TurnManager)
         // ==========================================
@@ -574,7 +579,7 @@ public class GameStateManager : NetworkBehaviour
         {
             bool esTurnoValido = TurnManager.Instance != null &&
                                  TurnManager.Instance.ActivePlayer != PlayerRef.None &&
-                                 TurnManager.Instance.ActivePlayer.PlayerId == playerId;
+                                 TurnManager.Instance.ActivePlayer == PendingPlayerRef;
 
             if (esTurnoValido)
             {
