@@ -478,9 +478,17 @@ public class GameStateManager : NetworkBehaviour
                 RevealedAnswersMask |= (1 << answerIndex); 
                 RegisterCorrectAnswer(PuntosRespuestas[answerIndex]); 
                 
-                var pData = Runner.GetPlayerObject(PlayerRef.FromIndex(playerId))?.GetComponent<PlayerNetworkData>();
+                PlayerNetworkData pData = null;
+                foreach (var pRef in Runner.ActivePlayers)
+                {
+                    if (pRef.PlayerId == playerId)
+                    {
+                        pData = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>();
+                        break;
+                    }
+                }
                 ActiveTeam = (pData != null && pData.TeamIndex == 2) ? "B" : "A";
-                CurrentState = GameState.Playing; 
+                CurrentState = GameState.Playing;
 
                 if (TurnManager.Instance != null)
                 {
