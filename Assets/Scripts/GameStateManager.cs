@@ -353,7 +353,12 @@ public class GameStateManager : NetworkBehaviour
 
             if (TurnManager.Instance != null) TurnManager.Instance.AdvanceTurnInTeam(stealingTeam);
         }
-        else ErrorCount = newErrors;
+        else
+        {
+            ErrorCount = newErrors;
+            if (CurrentState == GameState.Playing && TurnManager.Instance != null)
+                TurnManager.Instance.AdvanceTurnInTeam(ActiveTeam.ToString());
+        }
     }
 
     public void RegisterStealFailed()
@@ -523,10 +528,9 @@ public class GameStateManager : NetworkBehaviour
         // ==========================================
         else if (CurrentState == GameState.Playing)
         {
-            bool esTurnoValido = (TurnManager.Instance != null &&
-                                  TurnManager.Instance.ActivePlayer != PlayerRef.None &&
-                                  TurnManager.Instance.ActivePlayer.PlayerId == playerId)
-                                 || BuzzerWinnerId == playerId;
+            bool esTurnoValido = TurnManager.Instance != null &&
+                                 TurnManager.Instance.ActivePlayer != PlayerRef.None &&
+                                 TurnManager.Instance.ActivePlayer.PlayerId == playerId;
 
             if (esTurnoValido)
             {
@@ -559,10 +563,9 @@ public class GameStateManager : NetworkBehaviour
         // ==========================================
         else if (CurrentState == GameState.Stealing)
         {
-            bool esTurnoValido = (TurnManager.Instance != null &&
-                                  TurnManager.Instance.ActivePlayer != PlayerRef.None &&
-                                  TurnManager.Instance.ActivePlayer.PlayerId == playerId)
-                                 || BuzzerWinnerId == playerId;
+            bool esTurnoValido = TurnManager.Instance != null &&
+                                 TurnManager.Instance.ActivePlayer != PlayerRef.None &&
+                                 TurnManager.Instance.ActivePlayer.PlayerId == playerId;
 
             if (esTurnoValido)
             {
