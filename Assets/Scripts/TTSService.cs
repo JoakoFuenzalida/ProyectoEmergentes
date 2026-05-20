@@ -1,19 +1,15 @@
 using System;
 using System.Collections;
+using System.Diagnostics;
+using System.IO;
 using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
 
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-using System.IO;
-using System.Speech.Synthesis;
-using System.Threading;
-#endif
-
 /// <summary>
 /// Servicio TTS con dos modos seleccionables desde el Inspector:
-///   - SystemSpeech : voz local de Windows, gratis, sin internet (para pruebas)
-///   - ElevenLabs   : voz de alta calidad vía API cloud (para demos)
+///   - SystemSpeech : invoca PowerShell (gratis, local, sin internet) para pruebas con 40 usuarios
+///   - ElevenLabs   : API cloud de alta calidad para demos
 /// </summary>
 public class TTSService : MonoBehaviour
 {
@@ -23,12 +19,12 @@ public class TTSService : MonoBehaviour
 
     [Header("Modo TTS")]
     [Tooltip("SystemSpeech = voz Windows gratis (pruebas). ElevenLabs = voz cloud de calidad (demo).")]
-    [SerializeField] private ModoTTS modo     = ModoTTS.SystemSpeech;
+    [SerializeField] private ModoTTS modo      = ModoTTS.SystemSpeech;
     [SerializeField] private bool    ttsActivo = true;
 
     [Header("ElevenLabs — solo si Modo = ElevenLabs")]
     [SerializeField] private string apiKey  = "TU_API_KEY_AQUI";
-    [SerializeField] private string voiceId = "pNInz6obpgDQGcFmaJgB"; // Adam (multilingual)
+    [SerializeField] private string voiceId = "pNInz6obpgDQGcFmaJgB";
 
     [Header("Calidad de voz ElevenLabs")]
     [Range(0f, 1f)] [SerializeField] private float stability       = 0.55f;
@@ -58,70 +54,107 @@ public class TTSService : MonoBehaviour
             StartCoroutine(CoroutineSystemSpeech(texto, onDone));
     }
 
-    // ─── System.Speech (Windows local) ───────────────────────────────
+    // ─── System.Speech vía PowerShell ────────────────────────────────
+    // PowerShell tiene acceso a .NET Framework completo (incluido System.Speech)
+    // aunque Unity use .NET Standard. Se genera un WAV temporal y se carga.
 
     private IEnumerator CoroutineSystemSpeech(string texto, Action<AudioClip> onDone)
     {
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-        byte[]    wavData = null;
-        bool      listo   = false;
-        Exception error   = null;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+        string wavPath    = Path.Combine(Application.temporaryCachePath, "tts_temp.wav");
+        string scriptPath = Path.Combine(Application.temporaryCachePath, "tts_script.ps1");
 
-        // Corre en un hilo secundario para no bloquear Unity
-        var hilo = new Thread(() =>
+        // Escribir script a archivo evita problemas de escape con caracteres especiales
+        string script = BuildPowerShellScript(texto, wavPath);
+        File.WriteAllText(scriptPath, script, new UTF8Encoding(false));
+
+        // Ejecutar PowerShell en hilo secundario para no bloquear Unity
+        bool      listo = false;
+        Exception error = null;
+
+        var hilo = new System.Threading.Thread(() =>
         {
             try
             {
-                using var synth = new SpeechSynthesizer();
-
-                // Intentar voz en español; si no está instalada, usa la voz por defecto
-                try
+                var psi = new ProcessStartInfo("powershell.exe")
                 {
-                    synth.SelectVoiceByHints(VoiceGender.Male, VoiceAge.Adult, 0,
-                        new System.Globalization.CultureInfo("es-ES"));
-                }
-                catch
-                {
-                    try { synth.SelectVoiceByHints(VoiceGender.Male); } catch { }
-                }
-
-                using var stream = new MemoryStream();
-                synth.SetOutputToWaveStream(stream);
-                synth.Speak(texto);
-                wavData = stream.ToArray();
+                    Arguments      = $"-NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{scriptPath}\"",
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    RedirectStandardError = true
+                };
+                using var p = Process.Start(psi);
+                p.WaitForExit();
             }
             catch (Exception ex) { error = ex; }
             finally { listo = true; }
         });
-
         hilo.IsBackground = true;
         hilo.Start();
 
-        while (!listo) yield return null; // espera sin bloquear Unity
+        while (!listo) yield return null;
 
         if (error != null)
         {
-            Debug.LogError($"[TTS SystemSpeech] {error.Message}");
+            UnityEngine.Debug.LogError($"[TTS SystemSpeech] Error al lanzar PowerShell: {error.Message}");
             onDone?.Invoke(null);
             yield break;
         }
 
-        onDone?.Invoke(wavData != null && wavData.Length > 44 ? WavToAudioClip(wavData) : null);
+        if (!File.Exists(wavPath))
+        {
+            UnityEngine.Debug.LogWarning("[TTS SystemSpeech] No se generó el WAV. ¿Hay voces instaladas en Windows?");
+            onDone?.Invoke(null);
+            yield break;
+        }
 
+        // Cargar el WAV generado como AudioClip
+        string uri = new Uri(wavPath).AbsoluteUri;
+        using var www = UnityWebRequestMultimedia.GetAudioClip(uri, AudioType.WAV);
+        yield return www.SendWebRequest();
+
+        if (www.result == UnityWebRequest.Result.Success)
+            onDone?.Invoke(DownloadHandlerAudioClip.GetContent(www));
+        else
+        {
+            UnityEngine.Debug.LogError($"[TTS SystemSpeech] Error cargando WAV: {www.error}");
+            onDone?.Invoke(null);
+        }
 #else
-        Debug.LogWarning("[TTS] System.Speech solo está disponible en Windows.");
+        UnityEngine.Debug.LogWarning("[TTS] SystemSpeech solo disponible en Windows.");
         yield return null;
         onDone?.Invoke(null);
 #endif
     }
 
-    // ─── ElevenLabs (API cloud) ───────────────────────────────────────
+    private static string BuildPowerShellScript(string texto, string wavPath)
+    {
+        // Usamos here-string de PowerShell (@'...'@) para evitar escapes
+        // Solo problema posible: si el texto contiene "'@" al inicio de línea (prácticamente imposible)
+        string wavPathPs = wavPath.Replace("\\", "\\\\");
+        return
+$@"Add-Type -AssemblyName System.Speech
+$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+try {{
+    $synth.SelectVoiceByHints('Male', 'Adult', 0, [System.Globalization.CultureInfo]::new('es-ES'))
+}} catch {{
+    try {{ $synth.SelectVoiceByHints('Male') }} catch {{}}
+}}
+$synth.SetOutputToWaveFile('{wavPathPs}')
+$synth.Speak(@'
+{texto}
+'@)
+$synth.Dispose()
+";
+    }
+
+    // ─── ElevenLabs ───────────────────────────────────────────────────
 
     private IEnumerator CoroutineElevenLabs(string texto, Action<AudioClip> onDone)
     {
         if (string.IsNullOrWhiteSpace(apiKey) || apiKey == "TU_API_KEY_AQUI")
         {
-            Debug.LogWarning("[TTS] API key de ElevenLabs no configurada en el Inspector.");
+            UnityEngine.Debug.LogWarning("[TTS] API key de ElevenLabs no configurada en el Inspector.");
             onDone?.Invoke(null);
             yield break;
         }
@@ -140,7 +173,7 @@ public class TTSService : MonoBehaviour
 
         if (www.result != UnityWebRequest.Result.Success)
         {
-            Debug.LogError($"[TTS ElevenLabs] HTTP {www.responseCode}: {www.error}");
+            UnityEngine.Debug.LogError($"[TTS ElevenLabs] HTTP {www.responseCode}: {www.error}");
             onDone?.Invoke(null);
             yield break;
         }
@@ -168,7 +201,6 @@ public class TTSService : MonoBehaviour
 }}";
     }
 
-    // PCM 16-bit crudo (ElevenLabs) → AudioClip
     private static AudioClip PcmToAudioClip(byte[] pcm)
     {
         int     n       = pcm.Length / 2;
@@ -179,40 +211,6 @@ public class TTSService : MonoBehaviour
             samples[i] = raw / 32768f;
         }
         var clip = AudioClip.Create("tts_clip", n, 1, SAMPLE_RATE, false);
-        clip.SetData(samples, 0);
-        return clip;
-    }
-
-    // WAV (System.Speech) → AudioClip
-    private static AudioClip WavToAudioClip(byte[] wav)
-    {
-        // Buscar el chunk "data" (puede venir después de otros chunks)
-        int dataStart = 44;
-        for (int i = 12; i < wav.Length - 8; i++)
-        {
-            if (wav[i] == 'd' && wav[i+1] == 'a' && wav[i+2] == 't' && wav[i+3] == 'a')
-            {
-                dataStart = i + 8;
-                break;
-            }
-        }
-
-        int channels   = wav[22] | (wav[23] << 8);
-        int sampleRate = wav[24] | (wav[25] << 8) | (wav[26] << 16) | (wav[27] << 24);
-        int bitDepth   = wav[34] | (wav[35] << 8);
-        int bps        = bitDepth / 8;
-        int n          = (wav.Length - dataStart) / bps / channels;
-
-        float[] samples = new float[n * channels];
-        for (int i = 0; i < samples.Length; i++)
-        {
-            int idx = dataStart + i * bps;
-            samples[i] = bitDepth == 16
-                ? (short)(wav[idx] | (wav[idx + 1] << 8)) / 32768f
-                : (wav[idx] - 128) / 128f; // 8-bit
-        }
-
-        var clip = AudioClip.Create("tts_clip", n, channels, sampleRate, false);
         clip.SetData(samples, 0);
         return clip;
     }
