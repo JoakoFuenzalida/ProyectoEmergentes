@@ -256,7 +256,10 @@ public class AnimadorController : MonoBehaviour
     /// </summary>
     private IEnumerator ReproducirYEsperar(string texto, float duracionFallback)
     {
-        if (TTSService.Instance == null)
+        // Solo el host genera y reproduce audio TTS
+        bool soloTexto = TTSService.Instance == null ||
+                         (GameStateManager.Instance != null && !GameStateManager.Instance.Object.HasStateAuthority);
+        if (soloTexto)
         {
             yield return new WaitForSeconds(duracionFallback);
             yield break;
@@ -317,6 +320,8 @@ public class AnimadorController : MonoBehaviour
     private void ReproducirTTS(string texto)
     {
         if (TTSService.Instance == null) return;
+        // Solo el host reproduce audio — evita 40 llamadas a la API por el mismo texto
+        if (GameStateManager.Instance != null && !GameStateManager.Instance.Object.HasStateAuthority) return;
 
         // Incrementar ID cancela cualquier petición anterior en vuelo
         int myId = ++_ttsRequestId;

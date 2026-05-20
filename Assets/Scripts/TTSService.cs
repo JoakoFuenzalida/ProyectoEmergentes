@@ -14,6 +14,7 @@ public class TTSService : MonoBehaviour
     public static TTSService Instance { get; private set; }
 
     [Header("ElevenLabs — Configuración")]
+    [SerializeField] private bool   ttsActivo = true;               // desmarcar para pruebas
     [SerializeField] private string apiKey   = "TU_API_KEY_AQUI";
     [SerializeField] private string voiceId  = "pNInz6obpgDQGcFmaJgB"; // Adam (multilingual)
 
@@ -42,6 +43,12 @@ public class TTSService : MonoBehaviour
     /// </summary>
     public void GenerarAudio(string texto, Action<AudioClip> onDone)
     {
+        if (!ttsActivo)
+        {
+            onDone?.Invoke(null);
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(apiKey) || apiKey == "TU_API_KEY_AQUI")
         {
             Debug.LogWarning("[TTS] API key no configurada. Agrega tu key de ElevenLabs en el Inspector.");
