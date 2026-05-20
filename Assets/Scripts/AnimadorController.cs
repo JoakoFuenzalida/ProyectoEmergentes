@@ -232,18 +232,79 @@ public class AnimadorController : MonoBehaviour
 
     // ─── Página individual (intro y countdown) ───────────────────────
 
-    private IEnumerator Pagina(string texto, float duracion)
+    private IEnumerator Pagina(string texto, float duracionFallback)
     {
         Activar(viñetaEquipoA, textoEquipoA, texto);
         Activar(viñetaEquipoB, textoEquipoB, texto);
         Ocultar(viñetaPodio);
         UIGameController.Instance?.ActualizarTextoAnimador(texto);
         SetHablando(true);
-        ReproducirTTS(texto); // el audio llega ~1-2 seg después — se superpone a la viñeta
-        yield return new WaitForSeconds(duracion);
+
+        // Espera a que el audio llegue y termine — la viñeta dura lo que habla Martín
+        yield return StartCoroutine(ReproducirYEsperar(texto, duracionFallback));
+
         OcultarTodas();
         SetHablando(false);
         yield return new WaitForSeconds(pausaEntrePaginas);
+    }
+
+    // ─── TTS bloqueante (para páginas de intro/countdown) ────────────
+
+    /// <summary>
+    /// Solicita audio TTS, espera a que llegue y luego espera a que termine de reproducirse.
+    /// Si TTS tarda más de (duracionFallback + 5s) o falla, usa el tiempo fijo como respaldo.
+    /// </summary>
+    private IEnumerator ReproducirYEsperar(string texto, float duracionFallback)
+    {
+        if (TTSService.Instance == null)
+        {
+            yield return new WaitForSeconds(duracionFallback);
+            yield break;
+        }
+
+        int myId = ++_ttsRequestId;
+        string textoVoz = texto.Replace("\n", " ").Trim();
+
+        AudioClip clip   = null;
+        bool      llegó  = false;
+
+        TTSService.Instance.GenerarAudio(textoVoz, c =>
+        {
+            if (myId != _ttsRequestId) return; // cancelado por viñeta más nueva
+            clip  = c;
+            llegó = true;
+        });
+
+        // Esperar hasta que llegue el audio o se agote el timeout
+        float timeout = duracionFallback + 5f;
+        float t = 0f;
+        while (!llegó && t < timeout)
+        {
+            t += Time.deltaTime;
+            yield return null;
+        }
+
+        if (clip != null && myId == _ttsRequestId)
+        {
+            // Liberar clip anterior
+            if (audioSource.clip != null && audioSource.clip.name == "tts_clip")
+            {
+                AudioClip viejo = audioSource.clip;
+                audioSource.clip = null;
+                Destroy(viejo);
+            }
+            audioSource.clip = clip;
+            audioSource.Play();
+
+            // Esperar exactamente lo que dura el audio + pausa breve al final
+            yield return new WaitForSeconds(clip.length + 0.3f);
+        }
+        else
+        {
+            // Fallback: TTS no llegó a tiempo, duración fija
+            Debug.LogWarning($"[TTS] Timeout esperando audio para: \"{textoVoz.Substring(0, Mathf.Min(40, textoVoz.Length))}...\"");
+            yield return new WaitForSeconds(duracionFallback);
+        }
     }
 
     // ─── TTS ─────────────────────────────────────────────────────────
