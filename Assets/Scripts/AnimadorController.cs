@@ -154,6 +154,12 @@ public class AnimadorController : MonoBehaviour
         OcultarTodas();
         SetHablando(false);
         _secuenciaActiva = false;
+
+        // Avisar al GameStateManager que la presentación terminó — solo el host avanza el estado
+        if (GameStateManager.Instance != null &&
+            GameStateManager.Instance.Object != null &&
+            GameStateManager.Instance.Object.HasStateAuthority)
+            GameStateManager.Instance.TerminarIntro();
     }
 
     // ─── Anuncio de ronda en Countdown ───────────────────────────────
@@ -232,64 +238,47 @@ public class AnimadorController : MonoBehaviour
 
     // ─── Página individual (intro y countdown) ───────────────────────
 
+    /// <summary>
+    /// Muestra una página de la viñeta sincronizada con el audio TTS.
+    /// Estrategia: primero pide el audio en silencio, y cuando llega
+    /// muestra el texto y arranca el audio al mismo tiempo → sin desfase.
+    /// Si TTS no está disponible o hay timeout, usa duracionFallback.
+    /// </summary>
     private IEnumerator Pagina(string texto, float duracionFallback)
     {
+        // ── 1. Solicitar audio ANTES de mostrar nada ─────────────────
+        int       myId   = ++_ttsRequestId;
+        AudioClip clip   = null;
+        bool      llegó  = false;
+
+        if (TTSService.Instance != null)
+        {
+            string textoVoz = texto.Replace("\n", " ").Trim();
+            TTSService.Instance.GenerarAudio(textoVoz, c =>
+            {
+                if (myId != _ttsRequestId) return; // cancelado por página más nueva
+                clip  = c;
+                llegó = true;
+            });
+
+            // Esperar hasta 8 s máximo (red lenta / texto largo)
+            float t = 0f;
+            while (!llegó && t < 8f)
+            {
+                t += Time.deltaTime;
+                yield return null;
+            }
+        }
+
+        // ── 2. Mostrar viñeta + arrancar audio al mismo instante ──────
         Activar(viñetaEquipoA, textoEquipoA, texto);
         Activar(viñetaEquipoB, textoEquipoB, texto);
         Ocultar(viñetaPodio);
         UIGameController.Instance?.ActualizarTextoAnimador(texto);
         SetHablando(true);
 
-        // Espera a que el audio llegue y termine — la viñeta dura lo que habla Martín
-        yield return StartCoroutine(ReproducirYEsperar(texto, duracionFallback));
-
-        OcultarTodas();
-        SetHablando(false);
-        yield return new WaitForSeconds(pausaEntrePaginas);
-    }
-
-    // ─── TTS bloqueante (para páginas de intro/countdown) ────────────
-
-    /// <summary>
-    /// Solicita audio TTS, espera a que llegue y luego espera a que termine de reproducirse.
-    /// Si TTS tarda más de (duracionFallback + 5s) o falla, usa el tiempo fijo como respaldo.
-    /// </summary>
-    private IEnumerator ReproducirYEsperar(string texto, float duracionFallback)
-    {
-        // Solo el host genera y reproduce audio TTS
-        bool soloTexto = TTSService.Instance == null ||
-                         (GameStateManager.Instance != null && !GameStateManager.Instance.Object.HasStateAuthority);
-        if (soloTexto)
-        {
-            yield return new WaitForSeconds(duracionFallback);
-            yield break;
-        }
-
-        int myId = ++_ttsRequestId;
-        string textoVoz = texto.Replace("\n", " ").Trim();
-
-        AudioClip clip   = null;
-        bool      llegó  = false;
-
-        TTSService.Instance.GenerarAudio(textoVoz, c =>
-        {
-            if (myId != _ttsRequestId) return; // cancelado por viñeta más nueva
-            clip  = c;
-            llegó = true;
-        });
-
-        // Esperar hasta que llegue el audio o se agote el timeout
-        float timeout = duracionFallback + 5f;
-        float t = 0f;
-        while (!llegó && t < timeout)
-        {
-            t += Time.deltaTime;
-            yield return null;
-        }
-
         if (clip != null && myId == _ttsRequestId)
         {
-            // Liberar clip anterior
             if (audioSource.clip != null && audioSource.clip.name == "tts_clip")
             {
                 AudioClip viejo = audioSource.clip;
@@ -299,15 +288,19 @@ public class AnimadorController : MonoBehaviour
             audioSource.clip = clip;
             audioSource.Play();
 
-            // Esperar exactamente lo que dura el audio + pausa breve al final
-            yield return new WaitForSeconds(clip.length + 0.3f);
+            // Viñeta dura exactamente lo que habla Martín
+            yield return new WaitForSeconds(clip.length + 0.4f);
         }
         else
         {
-            // Fallback: TTS no llegó a tiempo, duración fija
-            Debug.LogWarning($"[TTS] Timeout esperando audio para: \"{textoVoz.Substring(0, Mathf.Min(40, textoVoz.Length))}...\"");
+            // Sin TTS: tiempo fijo de fallback
             yield return new WaitForSeconds(duracionFallback);
         }
+
+        // ── 3. Ocultar y pausa antes de la siguiente página ──────────
+        OcultarTodas();
+        SetHablando(false);
+        yield return new WaitForSeconds(pausaEntrePaginas);
     }
 
     // ─── TTS ─────────────────────────────────────────────────────────

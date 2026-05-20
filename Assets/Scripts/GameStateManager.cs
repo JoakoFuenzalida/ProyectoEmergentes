@@ -318,6 +318,19 @@ public class GameStateManager : NetworkBehaviour
 
     // ──────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Llamado por AnimadorController (solo host) cuando termina la secuencia de intro.
+    /// Avanza el estado a Countdown sin depender de un timer fijo.
+    /// </summary>
+    public void TerminarIntro()
+    {
+        if (!Object.HasStateAuthority) return;
+        if (CurrentState != GameState.Intro) return;
+        Timer = TickTimer.None;
+        CurrentState = GameState.Countdown;
+        Timer = TickTimer.CreateFromSeconds(Runner, 5.0f);
+    }
+
     public void StartGame()
     {
         if (!Object.HasStateAuthority) return;
@@ -333,9 +346,10 @@ public class GameStateManager : NetworkBehaviour
         // Escribir pregunta actual en [Networked] — llega a todos en el mismo snapshot
         SincronizarPreguntaActual();
 
-        // Intro: animador presenta el programa (35s cubre las 8 páginas de la secuencia)
+        // Intro: el AnimadorController llama a TerminarIntro() cuando termina de hablar.
+        // El timer de 300s es solo una red de seguridad por si algo falla.
         CurrentState = GameState.Intro;
-        Timer = TickTimer.CreateFromSeconds(Runner, 35.0f);
+        Timer = TickTimer.CreateFromSeconds(Runner, 300.0f);
     }
 
     public void RegisterCorrectAnswer(int points)
