@@ -4,26 +4,37 @@ using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
 
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+using System.IO;
+using System.Speech.Synthesis;
+using System.Threading;
+#endif
+
 /// <summary>
-/// Convierte texto a audio usando la API de ElevenLabs.
-/// Solicita PCM 16-bit crudo (sin contenedor) para decodificarlo
-/// directamente a AudioClip sin dependencias externas.
+/// Servicio TTS con dos modos seleccionables desde el Inspector:
+///   - SystemSpeech : voz local de Windows, gratis, sin internet (para pruebas)
+///   - ElevenLabs   : voz de alta calidad vía API cloud (para demos)
 /// </summary>
 public class TTSService : MonoBehaviour
 {
     public static TTSService Instance { get; private set; }
 
-    [Header("ElevenLabs — Configuración")]
-    [SerializeField] private bool   ttsActivo = true;               // desmarcar para pruebas
-    [SerializeField] private string apiKey   = "TU_API_KEY_AQUI";
-    [SerializeField] private string voiceId  = "pNInz6obpgDQGcFmaJgB"; // Adam (multilingual)
+    public enum ModoTTS { SystemSpeech, ElevenLabs }
 
-    [Header("Calidad de voz")]
-    [Range(0f, 1f)] [SerializeField] private float stability        = 0.55f;
-    [Range(0f, 1f)] [SerializeField] private float similarityBoost  = 0.80f;
-    [Range(0f, 1f)] [SerializeField] private float style            = 0.20f;
+    [Header("Modo TTS")]
+    [Tooltip("SystemSpeech = voz Windows gratis (pruebas). ElevenLabs = voz cloud de calidad (demo).")]
+    [SerializeField] private ModoTTS modo     = ModoTTS.SystemSpeech;
+    [SerializeField] private bool    ttsActivo = true;
 
-    // PCM 16-bit mono a 16 kHz — fácil de decodificar, sin librerías extra
+    [Header("ElevenLabs — solo si Modo = ElevenLabs")]
+    [SerializeField] private string apiKey  = "TU_API_KEY_AQUI";
+    [SerializeField] private string voiceId = "pNInz6obpgDQGcFmaJgB"; // Adam (multilingual)
+
+    [Header("Calidad de voz ElevenLabs")]
+    [Range(0f, 1f)] [SerializeField] private float stability       = 0.55f;
+    [Range(0f, 1f)] [SerializeField] private float similarityBoost = 0.80f;
+    [Range(0f, 1f)] [SerializeField] private float style           = 0.20f;
+
     private const string OUTPUT_FORMAT = "pcm_16000";
     private const int    SAMPLE_RATE   = 16000;
     private const string MODEL_ID      = "eleven_multilingual_v2";
@@ -35,76 +46,115 @@ public class TTSService : MonoBehaviour
         Instance = this;
     }
 
-    // ─── API pública ─────────────────────────────────────────────────
+    // ─── API pública ──────────────────────────────────────────────────
 
-    /// <summary>
-    /// Genera audio para el texto dado. onDone recibe el AudioClip listo
-    /// (o null si hubo error). Se llama desde el hilo principal de Unity.
-    /// </summary>
     public void GenerarAudio(string texto, Action<AudioClip> onDone)
     {
-        if (!ttsActivo)
-        {
-            onDone?.Invoke(null);
-            return;
-        }
+        if (!ttsActivo || string.IsNullOrWhiteSpace(texto)) { onDone?.Invoke(null); return; }
 
-        if (string.IsNullOrWhiteSpace(apiKey) || apiKey == "TU_API_KEY_AQUI")
-        {
-            Debug.LogWarning("[TTS] API key no configurada. Agrega tu key de ElevenLabs en el Inspector.");
-            onDone?.Invoke(null);
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(texto)) { onDone?.Invoke(null); return; }
-
-        StartCoroutine(GenerarAudioCoroutine(texto, onDone));
+        if (modo == ModoTTS.ElevenLabs)
+            StartCoroutine(CoroutineElevenLabs(texto, onDone));
+        else
+            StartCoroutine(CoroutineSystemSpeech(texto, onDone));
     }
 
-    // ─── Coroutine principal ──────────────────────────────────────────
+    // ─── System.Speech (Windows local) ───────────────────────────────
 
-    private IEnumerator GenerarAudioCoroutine(string texto, Action<AudioClip> onDone)
+    private IEnumerator CoroutineSystemSpeech(string texto, Action<AudioClip> onDone)
     {
-        string url = $"{BASE_URL}{voiceId}?output_format={OUTPUT_FORMAT}";
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+        byte[]    wavData = null;
+        bool      listo   = false;
+        Exception error   = null;
 
-        // Cuerpo JSON de la petición
-        string json = BuildRequestJson(texto);
-        byte[] bodyBytes = Encoding.UTF8.GetBytes(json);
+        // Corre en un hilo secundario para no bloquear Unity
+        var hilo = new Thread(() =>
+        {
+            try
+            {
+                using var synth = new SpeechSynthesizer();
+
+                // Intentar voz en español; si no está instalada, usa la voz por defecto
+                try
+                {
+                    synth.SelectVoiceByHints(VoiceGender.Male, VoiceAge.Adult, 0,
+                        new System.Globalization.CultureInfo("es-ES"));
+                }
+                catch
+                {
+                    try { synth.SelectVoiceByHints(VoiceGender.Male); } catch { }
+                }
+
+                using var stream = new MemoryStream();
+                synth.SetOutputToWaveStream(stream);
+                synth.Speak(texto);
+                wavData = stream.ToArray();
+            }
+            catch (Exception ex) { error = ex; }
+            finally { listo = true; }
+        });
+
+        hilo.IsBackground = true;
+        hilo.Start();
+
+        while (!listo) yield return null; // espera sin bloquear Unity
+
+        if (error != null)
+        {
+            Debug.LogError($"[TTS SystemSpeech] {error.Message}");
+            onDone?.Invoke(null);
+            yield break;
+        }
+
+        onDone?.Invoke(wavData != null && wavData.Length > 44 ? WavToAudioClip(wavData) : null);
+
+#else
+        Debug.LogWarning("[TTS] System.Speech solo está disponible en Windows.");
+        yield return null;
+        onDone?.Invoke(null);
+#endif
+    }
+
+    // ─── ElevenLabs (API cloud) ───────────────────────────────────────
+
+    private IEnumerator CoroutineElevenLabs(string texto, Action<AudioClip> onDone)
+    {
+        if (string.IsNullOrWhiteSpace(apiKey) || apiKey == "TU_API_KEY_AQUI")
+        {
+            Debug.LogWarning("[TTS] API key de ElevenLabs no configurada en el Inspector.");
+            onDone?.Invoke(null);
+            yield break;
+        }
+
+        string url  = $"{BASE_URL}{voiceId}?output_format={OUTPUT_FORMAT}";
+        byte[] body = Encoding.UTF8.GetBytes(BuildRequestJson(texto));
 
         using var www = new UnityWebRequest(url, "POST");
-        www.uploadHandler   = new UploadHandlerRaw(bodyBytes);
+        www.uploadHandler   = new UploadHandlerRaw(body);
         www.downloadHandler = new DownloadHandlerBuffer();
-        www.SetRequestHeader("xi-api-key",    apiKey);
-        www.SetRequestHeader("Content-Type",  "application/json");
-        www.SetRequestHeader("Accept",        "audio/mpeg");
+        www.SetRequestHeader("xi-api-key",   apiKey);
+        www.SetRequestHeader("Content-Type", "application/json");
+        www.SetRequestHeader("Accept",       "audio/mpeg");
 
         yield return www.SendWebRequest();
 
         if (www.result != UnityWebRequest.Result.Success)
         {
-            Debug.LogError($"[TTS] Error HTTP {www.responseCode}: {www.error}\n{www.downloadHandler.text}");
+            Debug.LogError($"[TTS ElevenLabs] HTTP {www.responseCode}: {www.error}");
             onDone?.Invoke(null);
             yield break;
         }
 
-        byte[] pcmData = www.downloadHandler.data;
-        if (pcmData == null || pcmData.Length < 2)
-        {
-            Debug.LogError("[TTS] Respuesta vacía de ElevenLabs.");
-            onDone?.Invoke(null);
-            yield break;
-        }
+        byte[] pcm = www.downloadHandler.data;
+        if (pcm == null || pcm.Length < 2) { onDone?.Invoke(null); yield break; }
 
-        // Decodificar PCM 16-bit little-endian → float[]
-        AudioClip clip = PcmToAudioClip(pcmData);
-        onDone?.Invoke(clip);
+        onDone?.Invoke(PcmToAudioClip(pcm));
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────
 
     private string BuildRequestJson(string texto)
     {
-        // Escapamos comillas para no romper el JSON manual
         string safe = texto.Replace("\\", "\\\\").Replace("\"", "\\\"");
         return $@"{{
   ""text"": ""{safe}"",
@@ -118,19 +168,51 @@ public class TTSService : MonoBehaviour
 }}";
     }
 
-    private static AudioClip PcmToAudioClip(byte[] pcmData)
+    // PCM 16-bit crudo (ElevenLabs) → AudioClip
+    private static AudioClip PcmToAudioClip(byte[] pcm)
     {
-        int sampleCount = pcmData.Length / 2; // 2 bytes por muestra (16-bit)
-        float[] samples = new float[sampleCount];
-
-        for (int i = 0; i < sampleCount; i++)
+        int     n       = pcm.Length / 2;
+        float[] samples = new float[n];
+        for (int i = 0; i < n; i++)
         {
-            // Little-endian 16-bit signed → float [-1, 1]
-            short raw = (short)(pcmData[i * 2] | (pcmData[i * 2 + 1] << 8));
+            short raw  = (short)(pcm[i * 2] | (pcm[i * 2 + 1] << 8));
             samples[i] = raw / 32768f;
         }
+        var clip = AudioClip.Create("tts_clip", n, 1, SAMPLE_RATE, false);
+        clip.SetData(samples, 0);
+        return clip;
+    }
 
-        AudioClip clip = AudioClip.Create("tts_clip", sampleCount, 1, SAMPLE_RATE, false);
+    // WAV (System.Speech) → AudioClip
+    private static AudioClip WavToAudioClip(byte[] wav)
+    {
+        // Buscar el chunk "data" (puede venir después de otros chunks)
+        int dataStart = 44;
+        for (int i = 12; i < wav.Length - 8; i++)
+        {
+            if (wav[i] == 'd' && wav[i+1] == 'a' && wav[i+2] == 't' && wav[i+3] == 'a')
+            {
+                dataStart = i + 8;
+                break;
+            }
+        }
+
+        int channels   = wav[22] | (wav[23] << 8);
+        int sampleRate = wav[24] | (wav[25] << 8) | (wav[26] << 16) | (wav[27] << 24);
+        int bitDepth   = wav[34] | (wav[35] << 8);
+        int bps        = bitDepth / 8;
+        int n          = (wav.Length - dataStart) / bps / channels;
+
+        float[] samples = new float[n * channels];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            int idx = dataStart + i * bps;
+            samples[i] = bitDepth == 16
+                ? (short)(wav[idx] | (wav[idx + 1] << 8)) / 32768f
+                : (wav[idx] - 128) / 128f; // 8-bit
+        }
+
+        var clip = AudioClip.Create("tts_clip", n, channels, sampleRate, false);
         clip.SetData(samples, 0);
         return clip;
     }
