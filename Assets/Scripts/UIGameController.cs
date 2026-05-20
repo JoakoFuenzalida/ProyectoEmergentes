@@ -116,6 +116,7 @@ public class UIGameController : MonoBehaviour
         GameStateManager.OnTemporaryStrikeEvent    += HandleTemporaryStrike;
         GameStateManager.OnEvaluationStateChangedEvent += HandleEvaluationStateChanged;
         GameStateManager.OnTeamNamesUpdatedEvent   += RefreshRoomUI;
+        GameStateManager.OnPreguntaActualizadaEvent += HandlePreguntaActualizada;
         TurnManager.OnTurnChangedEvent             += HandleTurnChanged;
         AnimadorIA.OnMensajeChanged                += MostrarBurbujaAnimador;
         AnimadorIA.OnGenerandoPreguntas            += HandleGenerandoPreguntas;
@@ -128,6 +129,7 @@ public class UIGameController : MonoBehaviour
         GameStateManager.OnTemporaryStrikeEvent    -= HandleTemporaryStrike;
         GameStateManager.OnEvaluationStateChangedEvent -= HandleEvaluationStateChanged;
         GameStateManager.OnTeamNamesUpdatedEvent   -= RefreshRoomUI;
+        GameStateManager.OnPreguntaActualizadaEvent -= HandlePreguntaActualizada;
         TurnManager.OnTurnChangedEvent             -= HandleTurnChanged;
         AnimadorIA.OnMensajeChanged                -= MostrarBurbujaAnimador;
         AnimadorIA.OnGenerandoPreguntas            -= HandleGenerandoPreguntas;
@@ -142,6 +144,24 @@ public class UIGameController : MonoBehaviour
         textoAnimador.text = mensaje;
         panelAnimador.SetActive(true);        // por si el padre estaba inactivo
         StartCoroutine(nameof(LimpiarMensajeCoroutine));
+    }
+
+    // Cuando la pregunta networked llega al cliente (puede ser más tarde que el cambio de estado)
+    private void HandlePreguntaActualizada()
+    {
+        if (textoPreguntaPrincipal == null || GameStateManager.Instance == null) return;
+        var estado = GameStateManager.Instance.CurrentState;
+        // Solo actualizar si estamos en una fase donde la pregunta debe verse
+        if (estado == GameStateManager.GameState.Countdown  ||
+            estado == GameStateManager.GameState.WaitingForBuzzer ||
+            estado == GameStateManager.GameState.TypingAnswer ||
+            estado == GameStateManager.GameState.Playing    ||
+            estado == GameStateManager.GameState.Stealing)
+        {
+            string pregunta = GameStateManager.Instance.PreguntaActual;
+            if (!string.IsNullOrEmpty(pregunta) && pregunta != "Cargando...")
+                textoPreguntaPrincipal.text = pregunta;
+        }
     }
 
     // Llamado directamente por AnimadorController (intro y mensajes del juego)

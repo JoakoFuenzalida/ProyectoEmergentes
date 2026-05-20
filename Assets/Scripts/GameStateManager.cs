@@ -99,6 +99,8 @@ public class GameStateManager : NetworkBehaviour
     public static event Action OnTeamNamesUpdatedEvent;
     // correct, points, playerName, teamName
     public static event Action<bool, int, string, string> OnAnswerResultEvent;
+    // Avisa a los clientes cuando la pregunta networked llega/cambia
+    public static event Action OnPreguntaActualizadaEvent;
 
     private ChangeDetector _changes;
 
@@ -234,6 +236,12 @@ public class GameStateManager : NetworkBehaviour
                     OnAnswerResultEvent?.Invoke(PendingIsCorrect, PendingResultPoints, pN, tN);
                     break;
                 }
+
+                // Cuando _netPregunta llega/cambia en el cliente, actualizar UI
+                case nameof(_netPregunta):
+                    if (!string.IsNullOrEmpty(_netPregunta.ToString()))
+                        OnPreguntaActualizadaEvent?.Invoke();
+                    break;
             }
         }
     }
