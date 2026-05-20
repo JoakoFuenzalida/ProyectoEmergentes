@@ -26,10 +26,16 @@ public class AnimadorController : MonoBehaviour
     [SerializeField] private float duracionPagina    = 3.8f; // tiempo por página en intro
     [SerializeField] private float pausaEntrePaginas = 0.4f; // pausa breve entre páginas
 
+    [Header("Audio TTS")]
+    [SerializeField] private AudioSource audioSource;
+
     private Animator  _animator;
     private Coroutine _viñetaCoroutine;
     private bool      _enPodio         = false;
     private bool      _secuenciaActiva = false; // bloquea mensajes externos durante intro/countdown
+
+    // Versión de petición TTS: si llega audio de una petición vieja, se descarta
+    private int _ttsRequestId = 0;
 
     private void Awake()
     {
@@ -42,6 +48,12 @@ public class AnimadorController : MonoBehaviour
     {
         OcultarTodas();
         TeleportarA(posEstudio);
+
+        // Configurar AudioSource si no fue asignado en el Inspector
+        if (audioSource == null)
+            audioSource = GetComponent<AudioSource>();
+        if (audioSource == null)
+            audioSource = gameObject.AddComponent<AudioSource>();
     }
 
     private void OnEnable()
@@ -184,6 +196,7 @@ public class AnimadorController : MonoBehaviour
         if (_viñetaCoroutine != null) StopCoroutine(_viñetaCoroutine);
         _viñetaCoroutine = StartCoroutine(CoroutineViñetaNormal(msg));
         UIGameController.Instance?.ActualizarTextoAnimador(msg);
+        ReproducirTTS(msg);
     }
 
     // ─── Mensajes del juego llegados via AnimadorIA ───────────────────
@@ -194,6 +207,7 @@ public class AnimadorController : MonoBehaviour
         if (_viñetaCoroutine != null) StopCoroutine(_viñetaCoroutine);
         _viñetaCoroutine = StartCoroutine(CoroutineViñetaNormal(mensaje));
         UIGameController.Instance?.ActualizarTextoAnimador(mensaje);
+        ReproducirTTS(mensaje);
     }
 
     private IEnumerator CoroutineViñetaNormal(string mensaje)
@@ -225,10 +239,49 @@ public class AnimadorController : MonoBehaviour
         Ocultar(viñetaPodio);
         UIGameController.Instance?.ActualizarTextoAnimador(texto);
         SetHablando(true);
+        ReproducirTTS(texto); // el audio llega ~1-2 seg después — se superpone a la viñeta
         yield return new WaitForSeconds(duracion);
         OcultarTodas();
         SetHablando(false);
         yield return new WaitForSeconds(pausaEntrePaginas);
+    }
+
+    // ─── TTS ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Solicita audio TTS para el texto dado.
+    /// Cuando llega, lo reproduce si no fue cancelado por un mensaje más nuevo.
+    /// El texto se limpia de saltos de línea antes de enviarlo a la API.
+    /// </summary>
+    private void ReproducirTTS(string texto)
+    {
+        if (TTSService.Instance == null) return;
+
+        // Incrementar ID cancela cualquier petición anterior en vuelo
+        int myId = ++_ttsRequestId;
+
+        // Limpiar formato visual (\n) que no debe leerlo la voz
+        string textoVoz = texto.Replace("\n", " ").Trim();
+
+        TTSService.Instance.GenerarAudio(textoVoz, clip =>
+        {
+            // Si ya llegó un mensaje más nuevo, descartamos este audio
+            if (clip == null || myId != _ttsRequestId) return;
+
+            if (audioSource != null)
+            {
+                // Liberar el clip anterior para no acumular memoria
+                if (audioSource.clip != null && audioSource.clip.name == "tts_clip")
+                {
+                    AudioClip viejo = audioSource.clip;
+                    audioSource.clip = null;
+                    Destroy(viejo);
+                }
+
+                audioSource.clip = clip;
+                audioSource.Play();
+            }
+        });
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────
