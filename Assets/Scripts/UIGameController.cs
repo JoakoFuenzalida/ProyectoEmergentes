@@ -60,6 +60,13 @@ public class UIGameController : MonoBehaviour
     [SerializeField] private TMP_Text[] casillasRespuestas = new TMP_Text[8];
     [SerializeField] private TMP_Text[] casillasPuntos = new TMP_Text[8];
 
+    [Header("Temporizador de turno")]
+    [SerializeField] private TMP_Text   textoTiempoTurno;   // número de segundos restantes
+    [SerializeField] private UnityEngine.UI.Slider sliderTiempo; // barra de progreso (opcional)
+    [SerializeField] private Color colorNormal  = Color.white;
+    [SerializeField] private Color colorUrgente = Color.red;
+    [SerializeField] private float umbralUrgente = 10f; // segundos para cambiar a rojo
+
     [Header("Menú de Pausa y Strikes")]
     [SerializeField] private GameObject panelPausa;
     [SerializeField] private GameObject panelStrikeGrande;
@@ -630,6 +637,9 @@ public class UIGameController : MonoBehaviour
             }
         }
 
+        // ── Temporizador de turno ──────────────────────────────────────
+        ActualizarTimerUI();
+
         // Actualización visual del tablero
         bool isServerReady = GameStateManager.Instance != null &&
                              GameStateManager.Instance.Object != null &&
@@ -657,6 +667,47 @@ public class UIGameController : MonoBehaviour
                     }
                 }
             }
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  Temporizador de turno
+    // ══════════════════════════════════════════════════════════════
+
+    private void ActualizarTimerUI()
+    {
+        if (GameStateManager.Instance == null || TurnManager.Instance == null) return;
+
+        var estado = GameStateManager.Instance.CurrentState;
+        bool activo = estado == GameStateManager.GameState.Playing    ||
+                      estado == GameStateManager.GameState.Stealing   ||
+                      estado == GameStateManager.GameState.TypingAnswer;
+
+        // Mostrar u ocultar según estado
+        if (textoTiempoTurno != null) textoTiempoTurno.gameObject.SetActive(activo);
+        if (sliderTiempo     != null) sliderTiempo.gameObject.SetActive(activo);
+
+        if (!activo) return;
+
+        float tiempoRestante  = TurnManager.Instance.TurnTimeLeft;
+        float normalizado     = TurnManager.Instance.TurnTimeNormalized;
+        bool  urgente         = tiempoRestante <= umbralUrgente;
+        Color color           = urgente ? colorUrgente : colorNormal;
+
+        // Texto con segundos restantes
+        if (textoTiempoTurno != null)
+        {
+            textoTiempoTurno.text  = Mathf.CeilToInt(tiempoRestante).ToString();
+            textoTiempoTurno.color = color;
+        }
+
+        // Barra de progreso (se vacía conforme pasa el tiempo)
+        if (sliderTiempo != null)
+        {
+            sliderTiempo.value = normalizado;
+            // Colorear el fill de la barra si tiene Image asignada
+            var fill = sliderTiempo.fillRect?.GetComponent<UnityEngine.UI.Image>();
+            if (fill != null) fill.color = color;
         }
     }
 
