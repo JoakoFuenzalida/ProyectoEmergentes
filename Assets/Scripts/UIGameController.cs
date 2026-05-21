@@ -61,11 +61,15 @@ public class UIGameController : MonoBehaviour
     [SerializeField] private TMP_Text[] casillasPuntos = new TMP_Text[8];
 
     [Header("Temporizador de turno")]
-    [SerializeField] private TMP_Text   textoTiempoTurno;   // número de segundos restantes
+    [SerializeField] private GameObject panelTiempoTurno;        // panel contenedor (se muestra/oculta completo)
+    [SerializeField] private TMP_Text   textoTiempoTurno;        // número de segundos restantes
     [SerializeField] private UnityEngine.UI.Slider sliderTiempo; // barra de progreso (opcional)
     [SerializeField] private Color colorNormal  = Color.white;
     [SerializeField] private Color colorUrgente = Color.red;
-    [SerializeField] private float umbralUrgente = 10f; // segundos para cambiar a rojo
+    [SerializeField] private float umbralUrgente = 10f;
+
+    [Header("Panel Puntos Equipo")]
+    [SerializeField] private GameObject panelPuntosEquipo; // panel contenedor de mis puntos (se muestra/oculta completo)
 
     [Header("Menú de Pausa y Strikes")]
     [SerializeField] private GameObject panelPausa;
@@ -451,8 +455,8 @@ public class UIGameController : MonoBehaviour
                 if (inputRespuesta) inputRespuesta.gameObject.SetActive(false);
                 if (labelPuntosRonda != null) labelPuntosRonda.SetActive(true);
                 if (valorPuntosRonda != null) valorPuntosRonda.gameObject.SetActive(true);
-                if (labelMisPuntos != null) labelMisPuntos.SetActive(true);
-                if (valorMisPuntos != null) valorMisPuntos.gameObject.SetActive(true);
+                if (panelPuntosEquipo != null) panelPuntosEquipo.SetActive(true);
+                else { if (labelMisPuntos != null) labelMisPuntos.SetActive(true); if (valorMisPuntos != null) valorMisPuntos.gameObject.SetActive(true); }
                 if (textoTurnoHUD != null) textoTurnoHUD.gameObject.SetActive(true);
                 if (textoPreguntaPrincipal != null && GameStateManager.Instance != null)
                     textoPreguntaPrincipal.text = GameStateManager.Instance.PreguntaActual;
@@ -497,8 +501,8 @@ public class UIGameController : MonoBehaviour
                 if (inputRespuesta) inputRespuesta.gameObject.SetActive(false);
                 if (labelPuntosRonda != null) labelPuntosRonda.SetActive(false);
                 if (valorPuntosRonda != null) valorPuntosRonda.gameObject.SetActive(false);
-                if (labelMisPuntos != null) labelMisPuntos.SetActive(false);
-                if (valorMisPuntos != null) valorMisPuntos.gameObject.SetActive(false);
+                if (panelPuntosEquipo != null) panelPuntosEquipo.SetActive(false);
+                else { if (labelMisPuntos != null) labelMisPuntos.SetActive(false); if (valorMisPuntos != null) valorMisPuntos.gameObject.SetActive(false); }
                 if (textoTurnoHUD != null) textoTurnoHUD.gameObject.SetActive(false);
                 // Ocultar panel del animador en el lobby
                 if (panelAnimador != null) panelAnimador.SetActive(false);
@@ -683,9 +687,10 @@ public class UIGameController : MonoBehaviour
                       estado == GameStateManager.GameState.Stealing   ||
                       estado == GameStateManager.GameState.TypingAnswer;
 
-        // Mostrar u ocultar según estado
-        if (textoTiempoTurno != null) textoTiempoTurno.gameObject.SetActive(activo);
-        if (sliderTiempo     != null) sliderTiempo.gameObject.SetActive(activo);
+        // Ocultar/mostrar el panel contenedor si existe; si no, el elemento directamente
+        if (panelTiempoTurno != null)   panelTiempoTurno.SetActive(activo);
+        else if (textoTiempoTurno != null) textoTiempoTurno.gameObject.SetActive(activo);
+        if (sliderTiempo != null && panelTiempoTurno == null) sliderTiempo.gameObject.SetActive(activo);
 
         if (!activo) return;
 
