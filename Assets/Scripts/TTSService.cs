@@ -127,19 +127,24 @@ public class TTSService : MonoBehaviour
 #endif
     }
 
-    private static string BuildPowerShellScript(string texto, string wavPath)
+    [Header("System.Speech — Voz local")]
+    [Tooltip("Locale de la voz Windows. Ejemplos: es-ES, es-MX, es-AR. Deja vacío para voz por defecto.")]
+    [SerializeField] private string localeSpeech = "es-ES";
+
+    private string BuildPowerShellScript(string texto, string wavPath)
     {
         // Usamos here-string de PowerShell (@'...'@) para evitar escapes
-        // Solo problema posible: si el texto contiene "'@" al inicio de línea (prácticamente imposible)
         string wavPathPs = wavPath.Replace("\\", "\\\\");
+        string localeCode = string.IsNullOrWhiteSpace(localeSpeech) ? "" : localeSpeech.Trim();
+
+        string selectVoice = string.IsNullOrEmpty(localeCode)
+            ? "try { $synth.SelectVoiceByHints('Male') } catch {}"
+            : $"try {{ $synth.SelectVoiceByHints('Male', 'Adult', 0, [System.Globalization.CultureInfo]::new('{localeCode}')) }} catch {{ try {{ $synth.SelectVoiceByHints('Male') }} catch {{}} }}";
+
         return
 $@"Add-Type -AssemblyName System.Speech
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
-try {{
-    $synth.SelectVoiceByHints('Male', 'Adult', 0, [System.Globalization.CultureInfo]::new('es-ES'))
-}} catch {{
-    try {{ $synth.SelectVoiceByHints('Male') }} catch {{}}
-}}
+{selectVoice}
 $synth.SetOutputToWaveFile('{wavPathPs}')
 $synth.Speak(@'
 {texto}
