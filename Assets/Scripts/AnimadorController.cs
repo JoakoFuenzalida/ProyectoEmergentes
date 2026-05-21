@@ -142,20 +142,77 @@ public class AnimadorController : MonoBehaviour
         string lA  = gsm != null ? gsm.GetLiderNombre(1) : "Lider A";
         string lB  = gsm != null ? gsm.GetLiderNombre(2) : "Lider B";
 
-        yield return StartCoroutine(Pagina("¡Hola a todos!\nSoy Martín Cárcamo,\nsu presentador de hoy.", 4f));
-        yield return StartCoroutine(Pagina("¡Bienvenidos a\n¿Qué Dice Chile?\nVersión Informática!", 4f));
-        yield return StartCoroutine(Pagina($"Hoy se enfrentan:\n{eqA}\nvs {eqB}", 3.8f));
-        yield return StartCoroutine(Pagina("Haré preguntas como:\n'¿Qué dirían 100 informáticos\nde la PUCV sobre...?'", 4.5f));
-        yield return StartCoroutine(Pagina("¡Deben adivinar las\nrespuestas más populares\nde nuestra encuesta!", 3.8f));
-        yield return StartCoroutine(Pagina("El juego es por turnos.\nCada equipo responde\ncuando le corresponde.", 3.8f));
-        yield return StartCoroutine(Pagina("En el podio, el primero\nen presionar ESPACIO\nresponde la pregunta.", 4f));
-        yield return StartCoroutine(Pagina($"{lA} y {lB},\n¡al podio!\n¡Que comience el juego!", 4f));
+        // ── Textos de cada página ────────────────────────────────────────
+        string[] display = {
+            "¡Hola a todos!\nSoy Martín Cárcamo,\nsu presentador de hoy.",
+            "¡Bienvenidos a\n¿Qué Dice Chile?\nVersión Informática!",
+            $"Hoy se enfrentan:\n{eqA}\nvs {eqB}",
+            "Haré preguntas como:\n'¿Qué dirían 100 informáticos\nde la PUCV sobre...?'",
+            "¡Deben adivinar las\nrespuestas más populares\nde nuestra encuesta!",
+            "El juego es por turnos.\nCada equipo responde\ncuando le corresponde.",
+            "En el podio, el primero\nen presionar ESPACIO\nresponde la pregunta.",
+            $"{lA} y {lB},\n¡al podio!\n¡Que comience el juego!"
+        };
+        float[] durs = { 4f, 4f, 3.8f, 4.5f, 3.8f, 3.8f, 4f, 4f };
+        int total = display.Length;
+
+        // ── Pre-fetch todos los clips en paralelo ────────────────────────
+        // Todos los audios se piden a la vez para que cuando llegue la página
+        // ya esté listo, eliminando el gap entre páginas.
+        var clips  = new AudioClip[total];
+        var listos = new bool[total];
+
+        if (TTSService.Instance != null)
+        {
+            for (int i = 0; i < total; i++)
+            {
+                int   idx = i;
+                string voz = display[idx].Replace("\n", " ").Trim();
+                TTSService.Instance.GenerarAudio(voz, c => { clips[idx] = c; listos[idx] = true; });
+            }
+        }
+        else { for (int i = 0; i < total; i++) listos[i] = true; }
+
+        // ── Reproducir cada página al llegar su clip ─────────────────────
+        for (int i = 0; i < total; i++)
+        {
+            if (!_secuenciaActiva) break; // abortado por cambio de estado
+
+            // Esperar que este clip esté listo (máx 10 s)
+            for (float t = 0f; !listos[i] && t < 10f; t += Time.deltaTime) yield return null;
+
+            // Mostrar viñeta
+            Activar(viñetaEquipoA, textoEquipoA, display[i]);
+            Activar(viñetaEquipoB, textoEquipoB, display[i]);
+            Ocultar(viñetaPodio);
+            UIGameController.Instance?.ActualizarTextoAnimador(display[i]);
+            SetHablando(true);
+
+            if (clips[i] != null)
+            {
+                if (audioSource.clip != null && audioSource.clip.name == "tts_clip")
+                { var v = audioSource.clip; audioSource.clip = null; Destroy(v); }
+                audioSource.clip = clips[i];
+                audioSource.Play();
+                yield return new WaitForSeconds(clips[i].length + 0.4f);
+                audioSource.Stop();
+                Destroy(clips[i]);
+                clips[i] = null;
+            }
+            else
+            {
+                yield return new WaitForSeconds(durs[i]);
+            }
+
+            OcultarTodas();
+            SetHablando(false);
+            yield return new WaitForSeconds(pausaEntrePaginas);
+        }
 
         OcultarTodas();
         SetHablando(false);
         _secuenciaActiva = false;
 
-        // Avisar al GameStateManager que la presentación terminó — solo el host avanza el estado
         if (GameStateManager.Instance != null &&
             GameStateManager.Instance.Object != null &&
             GameStateManager.Instance.Object.HasStateAuthority)
@@ -313,8 +370,9 @@ public class AnimadorController : MonoBehaviour
     private void ReproducirTTS(string texto)
     {
         if (TTSService.Instance == null) return;
-        // Solo el host reproduce audio — evita 40 llamadas a la API por el mismo texto
-        if (GameStateManager.Instance != null && !GameStateManager.Instance.Object.HasStateAuthority) return;
+
+        // Cortar audio anterior inmediatamente al llegar mensaje nuevo
+        if (audioSource != null && audioSource.isPlaying) audioSource.Stop();
 
         // Incrementar ID cancela cualquier petición anterior en vuelo
         int myId = ++_ttsRequestId;

@@ -687,10 +687,13 @@ public class UIGameController : MonoBehaviour
                       estado == GameStateManager.GameState.Stealing   ||
                       estado == GameStateManager.GameState.TypingAnswer;
 
-        // Ocultar/mostrar el panel contenedor si existe; si no, el elemento directamente
-        if (panelTiempoTurno != null)   panelTiempoTurno.SetActive(activo);
-        else if (textoTiempoTurno != null) textoTiempoTurno.gameObject.SetActive(activo);
-        if (sliderTiempo != null && panelTiempoTurno == null) sliderTiempo.gameObject.SetActive(activo);
+        // Panel contenedor (si existe) — lo muestra/oculta completo
+        if (panelTiempoTurno != null) panelTiempoTurno.SetActive(activo);
+        // Texto y slider se controlan siempre de forma independiente
+        // (pueden estar dentro o fuera del panel)
+        if (textoTiempoTurno != null && panelTiempoTurno == null)
+            textoTiempoTurno.gameObject.SetActive(activo);
+        if (sliderTiempo != null) sliderTiempo.gameObject.SetActive(activo);
 
         if (!activo) return;
 
