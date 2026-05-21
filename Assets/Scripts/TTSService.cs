@@ -129,7 +129,7 @@ public class TTSService : MonoBehaviour
 
     [Header("System.Speech — Voz local")]
     [Tooltip("Locale de la voz Windows. Ejemplos: es-ES, es-MX, es-AR. Deja vacío para voz por defecto.")]
-    [SerializeField] private string localeSpeech = "es-ES";
+    [SerializeField] private string localeSpeech = "es-MX";
 
     private string BuildPowerShellScript(string texto, string wavPath)
     {
@@ -137,9 +137,10 @@ public class TTSService : MonoBehaviour
         string wavPathPs = wavPath.Replace("\\", "\\\\");
         string localeCode = string.IsNullOrWhiteSpace(localeSpeech) ? "" : localeSpeech.Trim();
 
+        // Usamos NotSet en género para tomar cualquier voz del locale (Helena, Sabina, etc.)
         string selectVoice = string.IsNullOrEmpty(localeCode)
-            ? "try { $synth.SelectVoiceByHints('Male') } catch {}"
-            : $"try {{ $synth.SelectVoiceByHints('Male', 'Adult', 0, [System.Globalization.CultureInfo]::new('{localeCode}')) }} catch {{ try {{ $synth.SelectVoiceByHints('Male') }} catch {{}} }}";
+            ? "try { $synth.SelectVoiceByHints('NotSet') } catch {}"
+            : $"try {{ $synth.SelectVoiceByHints('NotSet', 'NotSet', 0, [System.Globalization.CultureInfo]::new('{localeCode}')) }} catch {{ try {{ $synth.SelectVoiceByHints('NotSet') }} catch {{}} }}";
 
         return
 $@"Add-Type -AssemblyName System.Speech
