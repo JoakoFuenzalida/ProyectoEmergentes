@@ -82,6 +82,16 @@ public class UIGameController : MonoBehaviour
     [SerializeField] private TMP_Text   textoAnimador;
     [SerializeField] private TMP_Text   textoEstadoGeneracion; // opcional: muestra "Generando preguntas..."
 
+    [Header("Start Screen")]
+    [SerializeField] private GameObject panelStartScreen;
+    [SerializeField] private TMP_Text   textoPresionaTecla;
+    [SerializeField] private AudioSource musicaInicioSource;
+    [SerializeField] private AudioClip  musicaInicioClip;
+    [Range(0f, 1f)] [SerializeField] private float musicaInicioVolumen = 0.35f;
+    [SerializeField] private float musicaInicioFadeSegundos = 2f;
+    [Range(0f, 1f)] [SerializeField] private float musicaLobbyVolumen = 0.12f;
+    [SerializeField] private float musicaLobbyFadeSegundos = 1.2f;
+
     private float localTimer = 0f;
     private bool isCounting = false;
     private bool isPaused = false;
@@ -96,6 +106,9 @@ public class UIGameController : MonoBehaviour
     // Reintento de buzzer: cuando se gana el buzzer, reintentar ActualizarControlInput
     // durante N frames para cubrir retrasos de sincronización de red
     private int _buzzerRetryFrames = 0;
+    private bool _startScreenActive = false;
+    private GameStateManager.GameState _queuedState = GameStateManager.GameState.WaitingForPlayers;
+    private Coroutine _fadeMusicCoroutine;
 
     private void Awake()
     {
@@ -117,7 +130,9 @@ public class UIGameController : MonoBehaviour
         if (textoNombreJugadorLobby != null && string.IsNullOrWhiteSpace(textoNombreJugadorLobby.text))
             textoNombreJugadorLobby.text = "Jugador";
 
+        _queuedState = GameStateManager.GameState.WaitingForPlayers;
         HandleStateChanged(GameStateManager.GameState.WaitingForPlayers);
+        if (panelStartScreen != null) ActivarStartScreen();
     }
 
     private void OnEnable()
@@ -424,6 +439,11 @@ public class UIGameController : MonoBehaviour
                              GameStateManager.Instance.Object != null &&
                              GameStateManager.Instance.Object.IsValid;
         if (isServerReady && GameStateManager.Instance.IsEvaluating) return;
+        if (_startScreenActive)
+        {
+            _queuedState = newState;
+            return;
+        }
 
         switch (newState)
         {
@@ -597,6 +617,12 @@ public class UIGameController : MonoBehaviour
 
     private void Update()
     {
+        if (_startScreenActive)
+        {
+            if (Input.anyKeyDown) DesactivarStartScreen();
+            return;
+        }
+
         if (Input.GetKeyDown(KeyCode.Escape)) TogglePauseMenu();
 
         // Polling de seguridad para el buzzer: reintenta ActualizarControlInput() cada frame
@@ -740,6 +766,77 @@ public class UIGameController : MonoBehaviour
         // BUG FIX: Resetear flag de turno al enviar respuesta
         // evita que el Update reactive el campo mientras el servidor evalúa
         _esMiTurnoActual = false;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  Start Screen
+    // ══════════════════════════════════════════════════════════════
+
+    private void ActivarStartScreen()
+    {
+        _startScreenActive = true;
+        if (panelStartScreen != null)
+        {
+            panelStartScreen.SetActive(true);
+            panelStartScreen.transform.SetAsLastSibling();
+        }
+
+        if (textoPresionaTecla != null && string.IsNullOrWhiteSpace(textoPresionaTecla.text))
+            textoPresionaTecla.text = "Presiona cualquier tecla para comenzar";
+
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+
+        IniciarMusicaInicio();
+    }
+
+    private void DesactivarStartScreen()
+    {
+        _startScreenActive = false;
+        if (panelStartScreen != null) panelStartScreen.SetActive(false);
+        BajarMusicaParaLobby();
+        HandleStateChanged(_queuedState);
+    }
+
+    private void IniciarMusicaInicio()
+    {
+        if (musicaInicioSource == null) return;
+        if (musicaInicioClip != null) musicaInicioSource.clip = musicaInicioClip;
+        if (musicaInicioSource.clip == null) return;
+
+        musicaInicioSource.loop = true;
+        if (_fadeMusicCoroutine != null) StopCoroutine(_fadeMusicCoroutine);
+        musicaInicioSource.volume = 0f;
+        if (!musicaInicioSource.isPlaying) musicaInicioSource.Play();
+        _fadeMusicCoroutine = StartCoroutine(FadeMusicaCoroutine(musicaInicioVolumen, musicaInicioFadeSegundos));
+    }
+
+    private void BajarMusicaParaLobby()
+    {
+        if (musicaInicioSource == null || musicaInicioSource.clip == null) return;
+        if (!musicaInicioSource.isPlaying) musicaInicioSource.Play();
+        if (_fadeMusicCoroutine != null) StopCoroutine(_fadeMusicCoroutine);
+        _fadeMusicCoroutine = StartCoroutine(FadeMusicaCoroutine(musicaLobbyVolumen, musicaLobbyFadeSegundos));
+    }
+
+    private IEnumerator FadeMusicaCoroutine(float targetVolume, float seconds)
+    {
+        if (musicaInicioSource == null) yield break;
+        if (seconds <= 0f)
+        {
+            musicaInicioSource.volume = targetVolume;
+            yield break;
+        }
+
+        float startVolume = musicaInicioSource.volume;
+        float t = 0f;
+        while (t < seconds)
+        {
+            t += Time.deltaTime;
+            musicaInicioSource.volume = Mathf.Lerp(startVolume, targetVolume, t / seconds);
+            yield return null;
+        }
+        musicaInicioSource.volume = targetVolume;
     }
 
     // ══════════════════════════════════════════════════════════════
