@@ -61,8 +61,9 @@ public class TTSService : MonoBehaviour
     private IEnumerator CoroutineSystemSpeech(string texto, Action<AudioClip> onDone)
     {
 #if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
-        string wavPath    = Path.Combine(Application.temporaryCachePath, "tts_temp.wav");
-        string scriptPath = Path.Combine(Application.temporaryCachePath, "tts_script.ps1");
+        string requestId  = Guid.NewGuid().ToString("N");
+        string wavPath    = Path.Combine(Application.temporaryCachePath, $"tts_{requestId}.wav");
+        string scriptPath = Path.Combine(Application.temporaryCachePath, $"tts_{requestId}.ps1");
 
         // Escribir script a archivo evita problemas de escape con caracteres especiales
         string script = BuildPowerShellScript(texto, wavPath);
@@ -98,6 +99,7 @@ public class TTSService : MonoBehaviour
         {
             UnityEngine.Debug.LogError($"[TTS SystemSpeech] Error al lanzar PowerShell: {error.Message}");
             onDone?.Invoke(null);
+            TryDeleteTempFiles(wavPath, scriptPath);
             yield break;
         }
 
@@ -105,6 +107,7 @@ public class TTSService : MonoBehaviour
         {
             UnityEngine.Debug.LogWarning("[TTS SystemSpeech] No se generó el WAV. ¿Hay voces instaladas en Windows?");
             onDone?.Invoke(null);
+            TryDeleteTempFiles(wavPath, scriptPath);
             yield break;
         }
 
@@ -120,6 +123,8 @@ public class TTSService : MonoBehaviour
             UnityEngine.Debug.LogError($"[TTS SystemSpeech] Error cargando WAV: {www.error}");
             onDone?.Invoke(null);
         }
+
+        TryDeleteTempFiles(wavPath, scriptPath);
 #else
         UnityEngine.Debug.LogWarning("[TTS] SystemSpeech solo disponible en Windows.");
         yield return null;
@@ -152,6 +157,14 @@ $synth.Speak(@'
 '@)
 $synth.Dispose()
 ";
+    }
+
+    private static void TryDeleteTempFiles(string wavPath, string scriptPath)
+    {
+        try { if (!string.IsNullOrEmpty(wavPath) && File.Exists(wavPath)) File.Delete(wavPath); }
+        catch { }
+        try { if (!string.IsNullOrEmpty(scriptPath) && File.Exists(scriptPath)) File.Delete(scriptPath); }
+        catch { }
     }
 
     // ─── ElevenLabs ───────────────────────────────────────────────────
