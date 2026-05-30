@@ -8,7 +8,6 @@ public class PlayerNetworkData : NetworkBehaviour
     [Networked] public int SeatIndex  { get; set; }
     [Networked] public NetworkBool IsReady   { get; set; }
     [Networked] public NetworkBool IsLeader  { get; set; }
-
     public override void Spawned()
     {
         if (Object.HasInputAuthority)
@@ -56,4 +55,5 @@ public class PlayerNetworkData : NetworkBehaviour
 
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
     public void RPC_SetName(string name) { PlayerName = name; }
+
 }

@@ -28,6 +28,7 @@ public class AnimadorController : MonoBehaviour
 
     [Header("Audio TTS")]
     [SerializeField] private AudioSource audioSource;
+    [SerializeField] private Animator animatorTarget;
 
     private Animator  _animator;
     private Coroutine _viñetaCoroutine;
@@ -41,7 +42,23 @@ public class AnimadorController : MonoBehaviour
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance  = this;
-        _animator = GetComponent<Animator>();
+        _animator = animatorTarget;
+        if (_animator == null)
+        {
+            var animators = GetComponentsInChildren<Animator>(true);
+            if (animators.Length > 0)
+            {
+                _animator = animators[0];
+                foreach (var a in animators)
+                {
+                    if (a != null && a.gameObject != gameObject && a.isActiveAndEnabled)
+                    {
+                        _animator = a;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     private void Start()
