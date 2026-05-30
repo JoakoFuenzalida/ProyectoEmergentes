@@ -8,8 +8,15 @@ public class PlayerNetworkData : NetworkBehaviour
     [Networked] public int SeatIndex  { get; set; }
     [Networked] public NetworkBool IsReady   { get; set; }
     [Networked] public NetworkBool IsLeader  { get; set; }
+    [Networked] public int SkinIndex { get; set; }
+
+    [SerializeField] private PlayerSkinSelector skinSelector;
+    private int _lastAppliedSkinIndex = -1;
     public override void Spawned()
     {
+        if (skinSelector == null)
+            skinSelector = GetComponentInChildren<PlayerSkinSelector>(true);
+
         if (Object.HasInputAuthority)
         {
             string miNombre = UIGameController.Instance != null
@@ -20,11 +27,23 @@ public class PlayerNetworkData : NetworkBehaviour
                 miNombre = "Jugador " + Object.InputAuthority.PlayerId;
 
             RPC_SetName(miNombre);
+
+            // Asignar skin única — cada PlayerId obtiene un índice diferente automáticamente.
+            // (PlayerId empieza en 1 en Fusion; el módulo garantiza que nunca salga del rango.)
+            int totalSkins = (skinSelector != null && skinSelector.SkinCount > 0)
+                ? skinSelector.SkinCount : 8;
+            SkinIndex = (Object.InputAuthority.PlayerId - 1) % totalSkins;
         }
+
+        ApplySkinIfNeeded();
     }
 
     public override void Render()
     {
+        if (skinSelector == null)
+            skinSelector = GetComponentInChildren<PlayerSkinSelector>(true);
+
+        ApplySkinIfNeeded();
         if (UIGameController.Instance != null) UIGameController.Instance.RefreshRoomUI();
     }
 
@@ -55,5 +74,14 @@ public class PlayerNetworkData : NetworkBehaviour
 
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
     public void RPC_SetName(string name) { PlayerName = name; }
+
+    private void ApplySkinIfNeeded()
+    {
+        if (skinSelector == null) return;
+        if (_lastAppliedSkinIndex == SkinIndex) return;
+
+        skinSelector.SetSkinIndex(SkinIndex);
+        _lastAppliedSkinIndex = SkinIndex;
+    }
 
 }

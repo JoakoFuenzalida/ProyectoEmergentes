@@ -13,8 +13,11 @@ public class BillboardCanvas : MonoBehaviour
 
         if (_camCache == null) return;
 
-        // Copiar la rotación de la cámara activa → viñeta siempre paralela a la pantalla
-        transform.rotation = _camCache.transform.rotation;
+        // El texto debe apuntar HACIA la cámara, no en la misma dirección.
+        // Copiar la rotación de la cámara hacía que se viera la cara trasera (espejado).
+        Vector3 dirToCamera = _camCache.transform.position - transform.position;
+        if (dirToCamera.sqrMagnitude > 0.001f)
+            transform.rotation = Quaternion.LookRotation(dirToCamera, Vector3.up);
     }
 
     private static Camera FindCameraActiva()

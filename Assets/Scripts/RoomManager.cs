@@ -36,6 +36,8 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
 
     private NetworkSceneManagerDefault _sceneManager;
     private bool _isConnecting = false;
+    private readonly List<int> _availableSkinIndices = new List<int>(MAX_PLAYERS);
+    private readonly Dictionary<PlayerRef, int> _assignedSkins = new Dictionary<PlayerRef, int>();
 
     private void Awake()
     {
@@ -104,6 +106,8 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
         if (_isConnecting) return;
         _isConnecting = true;
 
+        if (mode == GameMode.Host) ResetSkinPool();
+
         // Limpiar runner anterior si existe
         if (Runner != null)
         {
@@ -171,6 +175,8 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
             
             // LÍNEA MÁGICA: Para que reconozca los nombres en las listas
             runner.SetPlayerObject(player, networkPlayerObject);
+
+            AssignSkinToPlayer(player, networkPlayerObject);
         }
     }
 
@@ -178,6 +184,7 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         UpdatePlayerCountUI();
         if (TeamAssigner.Instance != null) TeamAssigner.Instance.RemovePlayer(player);
+        ReleaseSkin(player);
     }
 
     public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
@@ -233,5 +240,51 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
         char[] code = new char[4];
         for (int i = 0; i < 4; i++) code[i] = chars[UnityEngine.Random.Range(0, chars.Length)];
         return new string(code);
+    }
+
+    private void ResetSkinPool()
+    {
+        _availableSkinIndices.Clear();
+        _assignedSkins.Clear();
+        for (int i = 0; i < MAX_PLAYERS; i++) _availableSkinIndices.Add(i);
+    }
+
+    private void AssignSkinToPlayer(PlayerRef player, NetworkObject playerObject)
+    {
+        var data = playerObject.GetComponent<PlayerNetworkData>();
+        if (data == null) return;
+
+        if (_assignedSkins.TryGetValue(player, out int existingSkin))
+        {
+            data.SkinIndex = existingSkin;
+            return;
+        }
+
+        int skinIndex = TakeRandomSkinIndex();
+        _assignedSkins[player] = skinIndex;
+        data.SkinIndex = skinIndex;
+    }
+
+    private int TakeRandomSkinIndex()
+    {
+        if (_availableSkinIndices.Count == 0)
+        {
+            Debug.LogWarning("[RoomManager] Sin skins disponibles, se reutilizará un índice.");
+            return UnityEngine.Random.Range(0, MAX_PLAYERS);
+        }
+
+        int pick = UnityEngine.Random.Range(0, _availableSkinIndices.Count);
+        int skinIndex = _availableSkinIndices[pick];
+        _availableSkinIndices.RemoveAt(pick);
+        return skinIndex;
+    }
+
+    private void ReleaseSkin(PlayerRef player)
+    {
+        if (!_assignedSkins.TryGetValue(player, out int skinIndex)) return;
+
+        _assignedSkins.Remove(player);
+        if (!_availableSkinIndices.Contains(skinIndex))
+            _availableSkinIndices.Add(skinIndex);
     }
 }

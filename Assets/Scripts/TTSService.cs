@@ -48,10 +48,39 @@ public class TTSService : MonoBehaviour
     {
         if (!ttsActivo || string.IsNullOrWhiteSpace(texto)) { onDone?.Invoke(null); return; }
 
+        texto = LimpiarParaTTS(texto);
+        if (string.IsNullOrWhiteSpace(texto)) { onDone?.Invoke(null); return; }
+
         if (modo == ModoTTS.ElevenLabs)
             StartCoroutine(CoroutineElevenLabs(texto, onDone));
         else
             StartCoroutine(CoroutineSystemSpeech(texto, onDone));
+    }
+
+    /// <summary>
+    /// Limpia el texto antes de enviarlo a la voz de Windows.
+    /// Elimina los signos que la voz pronuncia literalmente y normaliza
+    /// tildes para voces sin soporte nativo de español.
+    /// </summary>
+    private static string LimpiarParaTTS(string texto)
+    {
+        return texto
+            .Replace("\n",  " ")    // saltos de línea → espacio
+            .Replace("¿",   "")     // apertura pregunta   → la voz dice "signo de apertura"
+            .Replace("¡",   "")     // apertura exclamación → ídem
+            .Replace("'",   "")     // comilla simple recta (citas de respuestas)
+            .Replace("‘", "")  // ' comilla izquierda tipográfica
+            .Replace("’", "")  // ' comilla derecha tipográfica
+            .Replace("\"",  "")     // comillas dobles
+            // Tildes → sin tilde: voces Windows sin locale es-* las leen como código
+            .Replace("á", "a").Replace("Á", "A")
+            .Replace("é", "e").Replace("É", "E")
+            .Replace("í", "i").Replace("Í", "I")
+            .Replace("ó", "o").Replace("Ó", "O")
+            .Replace("ú", "u").Replace("Ú", "U")
+            .Replace("ü", "u").Replace("Ü", "U")
+            // ñ se conserva: quitarla destruye palabras ("año"→"ano", "mañana"→"manana")
+            .Trim();
     }
 
     // ─── System.Speech vía PowerShell ────────────────────────────────
