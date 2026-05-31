@@ -475,8 +475,23 @@ public class GameStateManager : NetworkBehaviour
         int fi = (int)((uint)(answer.GetHashCode() + playerId) % (uint)frasesSuspenso.Length);
         ActualizarMensajeAnimador(frasesSuspenso[fi]);
 
-        IsEvaluating      = true;
-        EvaluationTimer   = TickTimer.CreateFromSeconds(Runner, 1.5f);
+        IsEvaluating    = true;
+        // Timer de SEGURIDAD: AnimadorController lo cancela antes cuando el TTS termina.
+        // 12 s cubre: ~2s LLM + ~3s TTS generación + ~4s reproducción + margen.
+        EvaluationTimer = TickTimer.CreateFromSeconds(Runner, 12.0f);
+    }
+
+    /// <summary>
+    /// Llamado por AnimadorController (solo HOST) cuando el TTS de suspense termina.
+    /// Revela el resultado en ese instante en lugar de esperar el timer de seguridad.
+    /// </summary>
+    public void ReleaseEvaluation()
+    {
+        if (!Object.HasStateAuthority) return;
+        if (!IsEvaluating) return;
+        EvaluationTimer = TickTimer.None;
+        IsEvaluating    = false;
+        ApplyAnswerResult(PendingIsCorrect, PendingAnswerIndex, PendingPlayerId);
     }
 
     private static string Normalizar(string s) =>

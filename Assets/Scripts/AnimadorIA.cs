@@ -19,21 +19,23 @@ public class AnimadorIA : MonoBehaviour
 
     private void OnEnable()
     {
-        GameStateManager.OnStateChangedEvent   += HandleStateChanged;
-        GameStateManager.OnAnswerResultEvent   += HandleAnswerResult;
-        TurnManager.OnTurnChangedEvent         += HandleTurnChanged;
+        GameStateManager.OnStateChangedEvent            += HandleStateChanged;
+        GameStateManager.OnAnswerResultEvent            += HandleAnswerResult;
+        GameStateManager.OnEvaluationStateChangedEvent  += HandleEvaluationChanged;
+        TurnManager.OnTurnChangedEvent                  += HandleTurnChanged;
     }
 
     private void OnDisable()
     {
-        GameStateManager.OnStateChangedEvent   -= HandleStateChanged;
-        GameStateManager.OnAnswerResultEvent   -= HandleAnswerResult;
-        TurnManager.OnTurnChangedEvent         -= HandleTurnChanged;
+        GameStateManager.OnStateChangedEvent            -= HandleStateChanged;
+        GameStateManager.OnAnswerResultEvent            -= HandleAnswerResult;
+        GameStateManager.OnEvaluationStateChangedEvent  -= HandleEvaluationChanged;
+        TurnManager.OnTurnChangedEvent                  -= HandleTurnChanged;
     }
 
     // ─── API pública ─────────────────────────────────────────────────
 
-    public static void NotifyMensaje(string mensaje)   => OnMensajeChanged?.Invoke(mensaje);
+    public static void NotifyMensaje(string mensaje)    => OnMensajeChanged?.Invoke(mensaje);
     public static void NotifyGenerating(bool generando) => OnGenerandoPreguntas?.Invoke(generando);
 
     // ─── Estado del juego (solo host, vía LLM) ───────────────────────
@@ -53,7 +55,7 @@ public class AnimadorIA : MonoBehaviour
 
             case GameStateManager.GameState.Countdown:
                 GenerarYMostrar(
-                    $"ronda {gsm.CurrentRound} de {5}, " +
+                    $"ronda {gsm.CurrentRound} de 5, " +
                     $"lean bien la pregunta que ya esta arriba, preparense");
                 break;
 
@@ -91,26 +93,47 @@ public class AnimadorIA : MonoBehaviour
         }
     }
 
-    // ─── Resultado de respuesta (todos los clientes) ─────────────────
+    // ─── Suspense durante la evaluación (solo host) ──────────────────
+    // Se dispara cuando IsEvaluating cambia a true, es decir justo cuando
+    // el jugador envía su respuesta y el juego espera 3.5s antes de revelarla.
 
-    // La frase inmediata ya la pone GameStateManager vía ActualizarMensajeAnimador.
-    // Aquí generamos el comentario extendido del LLM (solo host).
+    private void HandleEvaluationChanged(bool isEvaluating)
+    {
+        if (!isEvaluating) return;   // solo reaccionar al INICIO de la evaluación
+        if (GameStateManager.Instance == null || !GameStateManager.Instance.Object.HasStateAuthority) return;
+        if (!GameStateManager.Instance.IsGameStarted) return;
+
+        var gsm = GameStateManager.Instance;
+
+        string nombre = gsm.Runner
+            ?.GetPlayerObject(PlayerRef.FromIndex(gsm.PendingPlayerId))
+            ?.GetComponent<PlayerNetworkData>()?.PlayerName.ToString() ?? "Jugador";
+        string respuesta = gsm.PendingAnswerText.ToString();
+
+        GenerarFraseSuspense(nombre, respuesta);
+    }
+
+    // ─── Resultado de respuesta (solo host) ──────────────────────────
+
     private void HandleAnswerResult(bool correct, int points, string playerName, string teamName)
     {
         if (GameStateManager.Instance == null || !GameStateManager.Instance.IsGameStarted) return;
         if (!GameStateManager.Instance.Object.HasStateAuthority) return;
 
-        var gsm = GameStateManager.Instance;
+        // Forzar reset: si el suspense LLM tardó más de 3.5s, la reacción
+        // siempre debe mostrarse de todas formas.
+        _generandoComentario = false;
+
         string contexto = correct
-            ? $"respuesta correcta de {playerName}, gana {points} puntos para {teamName}, " +
-              $"marcador {gsm.NombreEquipoA}: {gsm.ScoreA + (gsm.ActiveTeam.ToString() == "A" ? gsm.RoundScore : 0)}" +
-              $" vs {gsm.NombreEquipoB}: {gsm.ScoreB + (gsm.ActiveTeam.ToString() == "B" ? gsm.RoundScore : 0)}"
-            : $"respuesta incorrecta de {playerName} del equipo {teamName}, sale la X roja en el tablero";
+            ? $"respuesta correcta de {playerName}, grita CORRECTO con mucho entusiasmo, " +
+              $"suma {points} puntos para {teamName}"
+            : $"respuesta incorrecta de {playerName} del equipo {teamName}, " +
+              $"reacciona con decepcion con un Ohhhh, sale la X roja en el tablero";
 
         GenerarYMostrar(contexto);
     }
 
-    // ─── Cambio de turno (todos los clientes, hardcoded sin LLM) ─────
+    // ─── Cambio de turno (hardcoded, sin LLM) ────────────────────────
 
     private void HandleTurnChanged(PlayerRef player)
     {
@@ -130,16 +153,15 @@ public class AnimadorIA : MonoBehaviour
             : GameStateManager.Instance.NombreEquipoB.ToString();
 
         string[] frases = {
-            $"¡Turno de {playerName}!\n¿Cuál es tu respuesta?",
-            $"¡{playerName}, es tu momento!\n¡Dame una respuesta!",
-            $"¡Vamos {playerName}!\n¿Qué dice {teamName}?"
+            $"Turno de {playerName}! Cual es tu respuesta?",
+            $"{playerName}, es tu momento! Dame una respuesta!",
+            $"Vamos {playerName}! Que dice {teamName}?"
         };
-        // Determinista para todos los clientes
         int idx = (int)((uint)player.PlayerId % (uint)frases.Length);
         NotifyMensaje(frases[idx]);
     }
 
-    // ─── LLM helpers ────────────────────────────────────────────────
+    // ─── LLM helpers ─────────────────────────────────────────────────
 
     private void GenerarBienvenida()
     {
@@ -148,7 +170,7 @@ public class AnimadorIA : MonoBehaviour
 
         var gsm = GameStateManager.Instance;
         string equipoA = gsm != null ? gsm.NombreEquipoA.ToString() : "A";
-        string equipoB = gsm != null ? gsm.NombreEquipoB.ToString() : "B";
+        string equipoB = gsm != null ? gsm.NombreEquipoB.ToString() : "B";  // fix: era equipoA
         string liderA  = gsm != null ? gsm.GetLiderNombre(1) : "Jugador";
         string liderB  = gsm != null ? gsm.GetLiderNombre(2) : "Jugador";
 
@@ -158,6 +180,19 @@ public class AnimadorIA : MonoBehaviour
                           $"vs equipo {equipoB} con lider {liderB}, invita a los lideres al podio";
 
         OllamaService.Instance.GenerarBienvenida(contexto, mensaje =>
+        {
+            if (GameStateManager.Instance != null && !string.IsNullOrEmpty(mensaje))
+                GameStateManager.Instance.ActualizarMensajeAnimador(mensaje);
+            _generandoComentario = false;
+        });
+    }
+
+    private void GenerarFraseSuspense(string nombre, string respuesta)
+    {
+        if (_generandoComentario || OllamaService.Instance == null) return;
+        _generandoComentario = true;
+
+        OllamaService.Instance.GenerarFraseSuspense(nombre, respuesta, mensaje =>
         {
             if (GameStateManager.Instance != null && !string.IsNullOrEmpty(mensaje))
                 GameStateManager.Instance.ActualizarMensajeAnimador(mensaje);

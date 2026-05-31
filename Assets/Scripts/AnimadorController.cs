@@ -111,6 +111,8 @@ public class AnimadorController : MonoBehaviour
             case GameStateManager.GameState.Stealing:
             case GameStateManager.GameState.RoundEnd:
             case GameStateManager.GameState.GameOver:
+                // Liberar la bandera para que OnMensajeIA pueda mostrar viñetas en juego
+                _secuenciaActiva = false;
                 _enPodio = false;
                 TeleportarA(posEstudio);
                 Ocultar(viñetaPodio);
@@ -118,10 +120,12 @@ public class AnimadorController : MonoBehaviour
 
             // ── Podio ────────────────────────────────────────
             case GameStateManager.GameState.WaitingForBuzzer:
+                // Detener countdown si aún corre: evita que su OcultarTodas() final
+                // tape las próximas viñetas y que deje _secuenciaActiva = true
+                _secuenciaActiva = false;
+                DetenerViñeta();
                 _enPodio = true;
                 TeleportarA(posPodio);
-                Ocultar(viñetaEquipoA);
-                Ocultar(viñetaEquipoB);
                 break;
 
             case GameStateManager.GameState.TypingAnswer:
@@ -287,7 +291,24 @@ public class AnimadorController : MonoBehaviour
         if (_viñetaCoroutine != null) StopCoroutine(_viñetaCoroutine);
         _viñetaCoroutine = StartCoroutine(CoroutineViñetaNormal(mensaje));
         UIGameController.Instance?.ActualizarTextoAnimador(mensaje);
-        ReproducirTTS(mensaje);
+
+        // Si el juego está en fase de suspense (IsEvaluating) Y somos el host,
+        // liberar la evaluación cuando el TTS termine — así el reveal ocurre justo
+        // después del "DAMELA!" y no a los 1.5 s del timer fijo.
+        var gsm = GameStateManager.Instance;
+        bool esHostEvaluando = gsm != null &&
+                               gsm.Object != null &&
+                               gsm.Object.HasStateAuthority &&
+                               gsm.IsEvaluating;
+
+        ReproducirTTS(mensaje, esHostEvaluando ? LiberarEvaluacion : (System.Action)null);
+    }
+
+    private void LiberarEvaluacion()
+    {
+        var gsm = GameStateManager.Instance;
+        if (gsm == null || gsm.Object == null || !gsm.Object.HasStateAuthority) return;
+        gsm.ReleaseEvaluation();
     }
 
     private IEnumerator CoroutineViñetaNormal(string mensaje)
@@ -384,9 +405,18 @@ public class AnimadorController : MonoBehaviour
     /// Cuando llega, lo reproduce si no fue cancelado por un mensaje más nuevo.
     /// El texto se limpia de saltos de línea antes de enviarlo a la API.
     /// </summary>
-    private void ReproducirTTS(string texto)
+    /// <param name="onFinished">
+    /// Opcional. Se invoca cuando el audio termina de sonar (o cuando falla).
+    /// Usado por el suspense para liberar la evaluación justo al acabar el "DAMELA!".
+    /// </param>
+    private void ReproducirTTS(string texto, System.Action onFinished = null)
     {
-        if (TTSService.Instance == null) return;
+        if (TTSService.Instance == null)
+        {
+            // Sin TTS: esperar tiempo mínimo de suspense antes de liberar
+            if (onFinished != null) StartCoroutine(DelayCallback(3.0f, onFinished));
+            return;
+        }
 
         // Cortar audio anterior inmediatamente al llegar mensaje nuevo
         if (audioSource != null && audioSource.isPlaying) audioSource.Stop();
@@ -394,28 +424,51 @@ public class AnimadorController : MonoBehaviour
         // Incrementar ID cancela cualquier petición anterior en vuelo
         int myId = ++_ttsRequestId;
 
-        // Limpiar formato visual (\n) que no debe leerlo la voz
         string textoVoz = texto.Replace("\n", " ").Trim();
 
         TTSService.Instance.GenerarAudio(textoVoz, clip =>
         {
             // Si ya llegó un mensaje más nuevo, descartamos este audio
-            if (clip == null || myId != _ttsRequestId) return;
+            if (myId != _ttsRequestId) return;
+
+            if (clip == null)
+            {
+                // TTS falló: esperar tiempo mínimo antes de liberar
+                if (onFinished != null) StartCoroutine(DelayCallback(3.0f, onFinished));
+                return;
+            }
 
             if (audioSource != null)
             {
-                // Liberar el clip anterior para no acumular memoria
                 if (audioSource.clip != null && audioSource.clip.name == "tts_clip")
                 {
                     AudioClip viejo = audioSource.clip;
                     audioSource.clip = null;
                     Destroy(viejo);
                 }
-
                 audioSource.clip = clip;
                 audioSource.Play();
+
+                // Cuando el audio termina → disparar callback (ej: liberar evaluación)
+                if (onFinished != null)
+                    StartCoroutine(EsperarFinAudio(clip.length, myId, onFinished));
             }
+            else { onFinished?.Invoke(); }
         });
+    }
+
+    private IEnumerator EsperarFinAudio(float duracion, int requestId, System.Action onFinished)
+    {
+        yield return new WaitForSeconds(duracion + 0.4f); // pequeño buffer tras el audio
+        // Solo disparar si no llegó otro mensaje que canceló esta petición
+        if (requestId == _ttsRequestId)
+            onFinished?.Invoke();
+    }
+
+    private IEnumerator DelayCallback(float delay, System.Action callback)
+    {
+        yield return new WaitForSeconds(delay);
+        callback?.Invoke();
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────

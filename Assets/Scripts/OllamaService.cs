@@ -196,6 +196,36 @@ public class OllamaService : MonoBehaviour
         return g[UnityEngine.Random.Range(0, g.Length)];
     }
 
+    // ─── Suspense antes de revelar respuesta ─────────────────────────
+
+    public void GenerarFraseSuspense(string nombre, string respuesta, Action<string> onComplete)
+    {
+        StartCoroutine(CoroutineGenerarFraseSuspense(nombre, respuesta, onComplete));
+    }
+
+    private IEnumerator CoroutineGenerarFraseSuspense(string nombre, string respuesta,
+                                                       Action<string> onComplete)
+    {
+        string prompt =
+            "Eres Martin Carcamo, animador chileno de television del programa '100 Chilenos Dicen'. " +
+            $"El jugador {nombre} acaba de responder {respuesta}. " +
+            "Genera UNA sola frase (maximo 12 palabras) que genere maximo suspenso antes de revelar si es correcta. " +
+            "Menciona el nombre del jugador y su respuesta. Termina SIEMPRE con la palabra DAMELA. " +
+            "Solo la frase, sin comillas, sin signos de puntuacion especiales, sin explicaciones.";
+
+        yield return StartCoroutine(EnviarPrompt(prompt, r =>
+        {
+            string c = r.Trim().Replace("*", "").Replace("\"", "").Replace("\n", " ");
+            onComplete?.Invoke(c.Length >= 5
+                ? c.Substring(0, Mathf.Min(200, c.Length))
+                : FraseSuspenseFallback(nombre, respuesta));
+        },
+        _ => onComplete?.Invoke(FraseSuspenseFallback(nombre, respuesta))));
+    }
+
+    private static string FraseSuspenseFallback(string nombre, string respuesta) =>
+        $"{nombre} dice {respuesta}... DAMELA!";
+
     // ─── HTTP helper (formato Groq / OpenAI) ─────────────────────
 
     private IEnumerator EnviarPrompt(string prompt,
