@@ -11,7 +11,8 @@ public class TurnManager : NetworkBehaviour
     [Networked] public float     TurnTimeLeft  { get; private set; }
 
     [Header("Configuración de turno")]
-    [SerializeField] private float turnDurationSeconds = 30f;
+    [SerializeField] private int turnDurationDefault = 30;
+    [Networked] public int TurnDurationSeconds { get; set; }
 
     private Dictionary<string, int> _teamTurnIndex = new Dictionary<string, int>
     {
@@ -26,7 +27,7 @@ public class TurnManager : NetworkBehaviour
         Runner != null && ActivePlayer == Runner.LocalPlayer;
 
     public float TurnTimeNormalized =>
-        turnDurationSeconds > 0 ? Mathf.Clamp01(TurnTimeLeft / turnDurationSeconds) : 0f;
+        TurnDurationSeconds > 0 ? Mathf.Clamp01(TurnTimeLeft / (float)TurnDurationSeconds) : 0f;
 
     // TODO: Chat — habilitar input de chat solo para el equipo activo al cambiar turno
     public static event Action<PlayerRef> OnTurnChangedEvent;
@@ -35,6 +36,7 @@ public class TurnManager : NetworkBehaviour
     {
         Instance = this;
         _changes  = GetChangeDetector(ChangeDetector.Source.SimulationState);
+        if (Object.HasStateAuthority) TurnDurationSeconds = turnDurationDefault;
         GameStateManager.OnStateChangedEvent      += HandleStateChanged;
         GameStateManager.OnActiveTeamChangedEvent += HandleTeamChanged;
     }
@@ -69,6 +71,9 @@ public class TurnManager : NetworkBehaviour
                 case nameof(ActivePlayer):
                     OnTurnChangedEvent?.Invoke(ActivePlayer);
                     break;
+                case nameof(TurnDurationSeconds):
+                    GameStateManager.FireConfigChanged();
+                    break;
             }
         }
     }
@@ -77,6 +82,13 @@ public class TurnManager : NetworkBehaviour
     public void RPC_AdvanceTurnInTeam(string team)
     {
         AdvanceTurnInTeam(team);
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_SetTurnDuration(int segundos)
+    {
+        if (GameStateManager.Instance != null && GameStateManager.Instance.IsGameStarted) return;
+        TurnDurationSeconds = Mathf.Clamp(segundos, 10, 60);
     }
 
     public void AdvanceTurnInTeam(string team)
@@ -115,7 +127,7 @@ public class TurnManager : NetworkBehaviour
         }
 
         ActivePlayer = nextPlayer;
-        TurnTimeLeft = turnDurationSeconds;
+        TurnTimeLeft = TurnDurationSeconds;
         _timerRunning = true;
     }
     public void ResetTurnIndices()

@@ -1,6 +1,5 @@
 using UnityEngine;
 using TMPro;
-using UnityEngine.SceneManagement;
 using System.Collections;
 using Fusion;
 
@@ -28,6 +27,14 @@ public class UIGameController : MonoBehaviour
     [SerializeField] private GameObject btnArrancarPartida;
     [SerializeField] private GameObject btnListo;
     [SerializeField] private TMP_Text textoCodigoRoom;
+
+    [Header("RoomPanel: Configuración de Partida")]
+    [SerializeField] private TMP_Text   textoConfigRondas;    // muestra "Rondas: 5"
+    [SerializeField] private TMP_Text   textoConfigTiempo;    // muestra "Turno: 30sg"
+    [SerializeField] private GameObject btnEditarRondas;      // botón "Editar" rondas  (solo host)
+    [SerializeField] private GameObject btnEditarTiempo;      // botón "Editar" tiempo  (solo host)
+    [SerializeField] private GameObject panelOpcionesRondas;  // panel con opciones 1 / 3 / 5
+    [SerializeField] private GameObject panelOpcionesTiempo;  // panel con opciones 10 / 15 / 30sg
 
     [Header("Set 3D: Pantallas de Equipos")]
     [SerializeField] private TMP_Text pantalla3DEquipoA;
@@ -70,6 +77,13 @@ public class UIGameController : MonoBehaviour
 
     [Header("Panel Puntos Equipo")]
     [SerializeField] private GameObject panelPuntosEquipo; // panel contenedor de mis puntos (se muestra/oculta completo)
+
+    [Header("Panel Fin de Juego (Game Over)")]
+    [SerializeField] private GameObject panelGameOver;
+    [SerializeField] private TMP_Text   textoGanadorFinal;   // "Ganador: Equipo X" o "Empate!"
+    [SerializeField] private TMP_Text   textoMarcadorFinal;  // puntos finales — "EquipoA: X pts  |  EquipoB: Y pts"
+    [SerializeField] private TMP_Text   textoTablaEquipoA;   // tabla izquierda: jugadores Equipo A con aciertos
+    [SerializeField] private TMP_Text   textoTablaEquipoB;   // tabla derecha:   jugadores Equipo B con aciertos
 
     [Header("Menú de Pausa y Strikes")]
     [SerializeField] private GameObject panelPausa;
@@ -137,28 +151,49 @@ public class UIGameController : MonoBehaviour
 
     private void OnEnable()
     {
-        GameStateManager.OnStateChangedEvent       += HandleStateChanged;
-        GameStateManager.OnErrorAddedEvent         += HandleErrorAdded;
-        GameStateManager.OnTemporaryStrikeEvent    += HandleTemporaryStrike;
+        GameStateManager.OnStateChangedEvent           += HandleStateChanged;
+        GameStateManager.OnErrorAddedEvent             += HandleErrorAdded;
+        GameStateManager.OnTemporaryStrikeEvent        += HandleTemporaryStrike;
         GameStateManager.OnEvaluationStateChangedEvent += HandleEvaluationStateChanged;
-        GameStateManager.OnTeamNamesUpdatedEvent   += RefreshRoomUI;
-        GameStateManager.OnPreguntaActualizadaEvent += HandlePreguntaActualizada;
-        TurnManager.OnTurnChangedEvent             += HandleTurnChanged;
-        AnimadorIA.OnMensajeChanged                += MostrarBurbujaAnimador;
-        AnimadorIA.OnGenerandoPreguntas            += HandleGenerandoPreguntas;
+        GameStateManager.OnTeamNamesUpdatedEvent       += RefreshRoomUI;
+        GameStateManager.OnPreguntaActualizadaEvent    += HandlePreguntaActualizada;
+        TurnManager.OnTurnChangedEvent                 += HandleTurnChanged;
+        AnimadorIA.OnMensajeChanged                    += MostrarBurbujaAnimador;
+        AnimadorIA.OnGenerandoPreguntas                += HandleGenerandoPreguntas;
+        RoomManager.OnDisconnectedEvent                += HandleDisconnected;
+        GameStateManager.OnConfigChangedEvent          += ActualizarConfigUI;
     }
 
     private void OnDisable()
     {
-        GameStateManager.OnStateChangedEvent       -= HandleStateChanged;
-        GameStateManager.OnErrorAddedEvent         -= HandleErrorAdded;
-        GameStateManager.OnTemporaryStrikeEvent    -= HandleTemporaryStrike;
+        GameStateManager.OnStateChangedEvent           -= HandleStateChanged;
+        GameStateManager.OnErrorAddedEvent             -= HandleErrorAdded;
+        GameStateManager.OnTemporaryStrikeEvent        -= HandleTemporaryStrike;
         GameStateManager.OnEvaluationStateChangedEvent -= HandleEvaluationStateChanged;
-        GameStateManager.OnTeamNamesUpdatedEvent   -= RefreshRoomUI;
-        GameStateManager.OnPreguntaActualizadaEvent -= HandlePreguntaActualizada;
-        TurnManager.OnTurnChangedEvent             -= HandleTurnChanged;
-        AnimadorIA.OnMensajeChanged                -= MostrarBurbujaAnimador;
-        AnimadorIA.OnGenerandoPreguntas            -= HandleGenerandoPreguntas;
+        GameStateManager.OnTeamNamesUpdatedEvent       -= RefreshRoomUI;
+        GameStateManager.OnPreguntaActualizadaEvent    -= HandlePreguntaActualizada;
+        TurnManager.OnTurnChangedEvent                 -= HandleTurnChanged;
+        AnimadorIA.OnMensajeChanged                    -= MostrarBurbujaAnimador;
+        AnimadorIA.OnGenerandoPreguntas                -= HandleGenerandoPreguntas;
+        RoomManager.OnDisconnectedEvent                -= HandleDisconnected;
+        GameStateManager.OnConfigChangedEvent          -= ActualizarConfigUI;
+    }
+
+    // ─── Disconnect ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Llamado cuando RoomManager termina el shutdown (salida intencional o kick del host).
+    /// Resetea toda la UI del juego al estado de lobby inicial.
+    /// </summary>
+    private void HandleDisconnected()
+    {
+        // Detener timers locales y flags para evitar que el Update siga procesando
+        isCounting       = false;
+        _buzzerRetryFrames = 0;
+        _esMiTurnoActual = false;
+
+        // Forzar estado de lobby (oculta paneles de juego, muestra lobbyPanel)
+        HandleStateChanged(GameStateManager.GameState.WaitingForPlayers);
     }
 
     // ─── Animador IA ─────────────────────────────────────────────────
@@ -319,6 +354,8 @@ public class UIGameController : MonoBehaviour
 
         if (GameStateManager.Instance.Runner.IsServer && btnArrancarPartida != null)
             btnArrancarPartida.SetActive(todosListos && jugadoresConEquipo >= 2 && _preguntasListas);
+
+        ActualizarConfigUI();
     }
 
     public void Btn_AbrirEdicionEquipoA()
@@ -364,6 +401,71 @@ public class UIGameController : MonoBehaviour
     public void Btn_ToggleReady() { GetMyPlayerData()?.RPC_SetReady(!GetMyPlayerData().IsReady); }
     public void Btn_UnirseEquipoA() { GetMyPlayerData()?.RPC_JoinTeam(1); }
     public void Btn_UnirseEquipoB() { GetMyPlayerData()?.RPC_JoinTeam(2); }
+
+    // ── Editar rondas (host) ──────────────────────────────────────
+    public void Btn_EditarRondas()
+    {
+        if (panelOpcionesRondas == null) return;
+        bool abriendo = !panelOpcionesRondas.activeSelf;
+        panelOpcionesRondas.SetActive(abriendo);
+        // Cerrar el otro panel si estaba abierto
+        if (abriendo && panelOpcionesTiempo != null) panelOpcionesTiempo.SetActive(false);
+    }
+
+    public void Btn_SetRondas1() { AplicarRondas(1); }
+    public void Btn_SetRondas3() { AplicarRondas(3); }
+    public void Btn_SetRondas5() { AplicarRondas(5); }
+
+    private void AplicarRondas(int rondas)
+    {
+        if (GameStateManager.Instance != null) GameStateManager.Instance.RPC_SetTotalRondas(rondas);
+        if (panelOpcionesRondas != null) panelOpcionesRondas.SetActive(false);
+    }
+
+    // ── Editar tiempo de turno (host) ─────────────────────────────
+    public void Btn_EditarTiempo()
+    {
+        if (panelOpcionesTiempo == null) return;
+        bool abriendo = !panelOpcionesTiempo.activeSelf;
+        panelOpcionesTiempo.SetActive(abriendo);
+        // Cerrar el otro panel si estaba abierto
+        if (abriendo && panelOpcionesRondas != null) panelOpcionesRondas.SetActive(false);
+    }
+
+    public void Btn_SetTiempo10() { AplicarTiempo(10); }
+    public void Btn_SetTiempo15() { AplicarTiempo(15); }
+    public void Btn_SetTiempo30() { AplicarTiempo(30); }
+
+    private void AplicarTiempo(int segundos)
+    {
+        if (TurnManager.Instance != null) TurnManager.Instance.RPC_SetTurnDuration(segundos);
+        if (panelOpcionesTiempo != null) panelOpcionesTiempo.SetActive(false);
+    }
+
+    private void ActualizarConfigUI()
+    {
+        if (GameStateManager.Instance == null || GameStateManager.Instance.Runner == null) return;
+        bool esHost      = GameStateManager.Instance.Runner.IsServer;
+        bool juegoActivo = GameStateManager.Instance.IsGameStarted;
+
+        if (textoConfigRondas != null)
+            textoConfigRondas.text = $"Rondas: {GameStateManager.Instance.TotalRondas}";
+
+        if (textoConfigTiempo != null && TurnManager.Instance != null)
+            textoConfigTiempo.text = $"Turno: {TurnManager.Instance.TurnDurationSeconds}sg";
+
+        // El botón "Editar" solo lo ve el host antes de empezar
+        bool puedeEditar = esHost && !juegoActivo;
+        if (btnEditarRondas != null) btnEditarRondas.SetActive(puedeEditar);
+        if (btnEditarTiempo != null) btnEditarTiempo.SetActive(puedeEditar);
+
+        // Si el juego empieza, cerrar cualquier panel de opciones abierto
+        if (juegoActivo)
+        {
+            if (panelOpcionesRondas != null) panelOpcionesRondas.SetActive(false);
+            if (panelOpcionesTiempo != null) panelOpcionesTiempo.SetActive(false);
+        }
+    }
 
     // ══════════════════════════════════════════════════════════════
     //  Helpers de datos
@@ -492,14 +594,28 @@ public class UIGameController : MonoBehaviour
 
             case GameStateManager.GameState.WaitingForBuzzer:
             case GameStateManager.GameState.RoundEnd:
-            case GameStateManager.GameState.GameOver:
                 isCounting = false;
                 _buzzerRetryFrames = 0;
                 if (panelCountdown) panelCountdown.SetActive(false);
                 if (inputRespuesta) inputRespuesta.gameObject.SetActive(false);
                 Cursor.lockState = CursorLockMode.Locked;
                 Cursor.visible = false;
-                _esMiTurnoActual = false; // BUG FIX: resetear cuando no hay turno
+                _esMiTurnoActual = false;
+                break;
+
+            case GameStateManager.GameState.GameOver:
+                isCounting = false;
+                _buzzerRetryFrames = 0;
+                _esMiTurnoActual = false;
+                if (panelCountdown) panelCountdown.SetActive(false);
+                if (inputRespuesta) inputRespuesta.gameObject.SetActive(false);
+                if (panelTiempoTurno != null) panelTiempoTurno.SetActive(false);
+                if (sliderTiempo != null) sliderTiempo.gameObject.SetActive(false);
+                // El cursor se desbloquea para que el botón "Volver al lobby" sea clickeable
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+                // El panel de ganador se muestra DESPUÉS de que AnimadorController
+                // termina su secuencia de cierre → llama a MostrarPanelGanador()
                 break;
 
             case GameStateManager.GameState.TypingAnswer:
@@ -524,6 +640,15 @@ public class UIGameController : MonoBehaviour
                 if (panelPuntosEquipo != null) panelPuntosEquipo.SetActive(false);
                 else { if (labelMisPuntos != null) labelMisPuntos.SetActive(false); if (valorMisPuntos != null) valorMisPuntos.gameObject.SetActive(false); }
                 if (textoTurnoHUD != null) textoTurnoHUD.gameObject.SetActive(false);
+                // Ocultar timer de turno completamente para que no bloquee clicks en el lobby
+                if (panelTiempoTurno != null) panelTiempoTurno.SetActive(false);
+                if (textoTiempoTurno != null) textoTiempoTurno.gameObject.SetActive(false);
+                if (sliderTiempo != null) sliderTiempo.gameObject.SetActive(false);
+                // Ocultar panel de fin de juego
+                if (panelGameOver != null) panelGameOver.SetActive(false);
+                // Cerrar paneles de opciones de configuración
+                if (panelOpcionesRondas != null) panelOpcionesRondas.SetActive(false);
+                if (panelOpcionesTiempo != null) panelOpcionesTiempo.SetActive(false);
                 // Ocultar panel del animador en el lobby
                 if (panelAnimador != null) panelAnimador.SetActive(false);
                 Cursor.lockState = CursorLockMode.None;
@@ -706,7 +831,15 @@ public class UIGameController : MonoBehaviour
 
     private void ActualizarTimerUI()
     {
-        if (GameStateManager.Instance == null || TurnManager.Instance == null) return;
+        // Sin sesión activa → ocultar todo (evita que el panel bloquee clicks en el lobby)
+        if (GameStateManager.Instance == null || TurnManager.Instance == null)
+        {
+            if (panelTiempoTurno != null) panelTiempoTurno.SetActive(false);
+            if (textoTiempoTurno != null && panelTiempoTurno == null)
+                textoTiempoTurno.gameObject.SetActive(false);
+            if (sliderTiempo != null) sliderTiempo.gameObject.SetActive(false);
+            return;
+        }
 
         var estado = GameStateManager.Instance.CurrentState;
         bool activo = estado == GameStateManager.GameState.Playing    ||
@@ -840,6 +973,103 @@ public class UIGameController : MonoBehaviour
     }
 
     // ══════════════════════════════════════════════════════════════
+    //  Panel de Fin de Juego
+    // ══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Llamado por AnimadorController cuando termina la secuencia de cierre.
+    /// Muestra el panel de ganador con los marcadores finales.
+    /// </summary>
+    public void MostrarPanelGanador()
+    {
+        if (panelGameOver == null) return;
+
+        var gsm = GameStateManager.Instance;
+        if (gsm == null || gsm.Runner == null) return;
+
+        string eqA = gsm.NombreEquipoA.ToString();
+        string eqB = gsm.NombreEquipoB.ToString();
+        int    pA  = gsm.ScoreA;
+        int    pB  = gsm.ScoreB;
+
+        // ── Título: ganador o empate ──────────────────────────────────
+        if (textoGanadorFinal != null)
+        {
+            if      (pA > pB) textoGanadorFinal.text = eqA;
+            else if (pB > pA) textoGanadorFinal.text = eqB;
+            else              textoGanadorFinal.text  = "¡Empate!";
+        }
+
+        // ── Marcador general (línea simple de puntos) ─────────────────
+        if (textoMarcadorFinal != null)
+            textoMarcadorFinal.text = $"{eqA}: {pA} pts     |     {eqB}: {pB} pts";
+
+        // ── Recolectar jugadores y sus aciertos ───────────────────────
+        var jugA = new System.Collections.Generic.List<(string nombre, int aciertos)>();
+        var jugB = new System.Collections.Generic.List<(string nombre, int aciertos)>();
+
+        foreach (var pRef in gsm.Runner.ActivePlayers)
+        {
+            var data = gsm.Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>();
+            if (data == null) continue;
+            if      (data.TeamIndex == 1) jugA.Add((data.PlayerName.ToString(), data.Aciertos));
+            else if (data.TeamIndex == 2) jugB.Add((data.PlayerName.ToString(), data.Aciertos));
+        }
+
+        // Ordenar por aciertos (mayor primero)
+        jugA.Sort((a, b) => b.aciertos.CompareTo(a.aciertos));
+        jugB.Sort((a, b) => b.aciertos.CompareTo(a.aciertos));
+
+        // ── Tabla Equipo A (izquierda) ────────────────────────────────
+        if (textoTablaEquipoA != null)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine(eqA);
+            sb.AppendLine("──────────────");
+            if (jugA.Count == 0) sb.AppendLine("Sin jugadores");
+            else foreach (var (nombre, aciertos) in jugA)
+                sb.AppendLine($"{nombre}\n  {aciertos} acierto{(aciertos != 1 ? "s" : "")}");
+            textoTablaEquipoA.text = sb.ToString();
+        }
+
+        // ── Tabla Equipo B (derecha) ──────────────────────────────────
+        if (textoTablaEquipoB != null)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine(eqB);
+            sb.AppendLine("──────────────");
+            if (jugB.Count == 0) sb.AppendLine("Sin jugadores");
+            else foreach (var (nombre, aciertos) in jugB)
+                sb.AppendLine($"{nombre}\n  {aciertos} acierto{(aciertos != 1 ? "s" : "")}");
+            textoTablaEquipoB.text = sb.ToString();
+        }
+
+        // ── Ocultar todo el HUD de juego ─────────────────────────────
+        if (panelPregunta    != null) panelPregunta.SetActive(false);
+        if (panelRespuestas  != null) panelRespuestas.SetActive(false);
+        if (panelCountdown   != null) panelCountdown.SetActive(false);
+        if (panelTiempoTurno != null) panelTiempoTurno.SetActive(false);
+        if (sliderTiempo     != null) sliderTiempo.gameObject.SetActive(false);
+        if (textoTiempoTurno != null) textoTiempoTurno.gameObject.SetActive(false);
+        if (textoTurnoHUD    != null) textoTurnoHUD.gameObject.SetActive(false);
+        if (labelPuntosRonda != null) labelPuntosRonda.SetActive(false);
+        if (valorPuntosRonda != null) valorPuntosRonda.gameObject.SetActive(false);
+        if (panelPuntosEquipo != null) panelPuntosEquipo.SetActive(false);
+        else
+        {
+            if (labelMisPuntos != null) labelMisPuntos.SetActive(false);
+            if (valorMisPuntos != null) valorMisPuntos.gameObject.SetActive(false);
+        }
+        if (panelStrikeGrande != null) panelStrikeGrande.SetActive(false);
+        foreach (var icono in iconosX) if (icono != null) icono.SetActive(false);
+        if (inputRespuesta != null) inputRespuesta.gameObject.SetActive(false);
+
+        panelGameOver.SetActive(true);
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible   = true;
+    }
+
+    // ══════════════════════════════════════════════════════════════
     //  Pausa y salida
     // ══════════════════════════════════════════════════════════════
 
@@ -864,9 +1094,21 @@ public class UIGameController : MonoBehaviour
 
     public void Btn_SalirAlLobby()
     {
-        if (GameStateManager.Instance != null && GameStateManager.Instance.Runner != null)
-            GameStateManager.Instance.Runner.Shutdown();
-        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+        // Cerrar menú de pausa si está abierto
+        if (isPaused) TogglePauseMenu();
+
+        if (RoomManager.Instance != null)
+        {
+            // SalirAlLobby hace Runner.Shutdown() async → OnShutdown → RetornarAlLobby
+            // → OnDisconnectedEvent → HandleDisconnected() aquí en UIGameController.
+            // NO recargamos la escena: los paneles se ocultan/muestran via eventos.
+            RoomManager.Instance.SalirAlLobby();
+        }
+        else
+        {
+            // Fallback: sin RoomManager, resetear UI directamente
+            HandleStateChanged(GameStateManager.GameState.WaitingForPlayers);
+        }
     }
 
     public void Btn_SalirDelJuego()

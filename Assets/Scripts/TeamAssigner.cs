@@ -21,11 +21,24 @@ public class TeamAssigner : MonoBehaviour
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
-        DontDestroyOnLoad(gameObject);
+        // DontDestroyOnLoad eliminado: ya no recargamos la escena, así que el objeto
+        // vive con la escena y se puede resetear limpiamente entre sesiones.
+    }
+
+    /// <summary>
+    /// Borra todos los equipos asignados. Llamar antes de iniciar una nueva sesión de red.
+    /// </summary>
+    public void ResetForNewSession()
+    {
+        _playerTeams.Clear();
+        LocalTeam = string.Empty;
+        Debug.Log("[TeamAssigner] Equipos reseteados para nueva sesión.");
     }
 
     public void AssignTeam(PlayerRef player)
     {
+        // Ya no reutilizamos asignaciones antiguas: si el jugador estaba en _playerTeams
+        // de una sesión anterior, la asignación fue borrada por ResetForNewSession().
         if (_playerTeams.ContainsKey(player))
         {
             if (IsLocalPlayer(player))

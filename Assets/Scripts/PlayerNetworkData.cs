@@ -8,7 +8,8 @@ public class PlayerNetworkData : NetworkBehaviour
     [Networked] public int SeatIndex  { get; set; }
     [Networked] public NetworkBool IsReady   { get; set; }
     [Networked] public NetworkBool IsLeader  { get; set; }
-    [Networked] public int SkinIndex { get; set; }
+    [Networked] public int SkinIndex  { get; set; }
+    [Networked] public int Aciertos   { get; set; } // respuestas correctas en la partida actual
 
     [SerializeField] private PlayerSkinSelector skinSelector;
     private int _lastAppliedSkinIndex = -1;

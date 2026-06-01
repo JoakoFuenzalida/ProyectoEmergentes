@@ -110,12 +110,20 @@ public class AnimadorController : MonoBehaviour
             case GameStateManager.GameState.Playing:
             case GameStateManager.GameState.Stealing:
             case GameStateManager.GameState.RoundEnd:
-            case GameStateManager.GameState.GameOver:
                 // Liberar la bandera para que OnMensajeIA pueda mostrar viñetas en juego
                 _secuenciaActiva = false;
                 _enPodio = false;
                 TeleportarA(posEstudio);
                 Ocultar(viñetaPodio);
+                break;
+
+            case GameStateManager.GameState.GameOver:
+                // Cancelar cualquier viñeta activa y arrancar la secuencia de cierre
+                _secuenciaActiva = false;
+                DetenerViñeta();
+                _enPodio = false;
+                TeleportarA(posEstudio);
+                IniciarSecuenciaGameOver();
                 break;
 
             // ── Podio ────────────────────────────────────────
@@ -261,6 +269,98 @@ public class AnimadorController : MonoBehaviour
         OcultarTodas();
         SetHablando(false);
         _secuenciaActiva = false;
+    }
+
+    // ─── Secuencia de cierre (Game Over) ─────────────────────────────
+
+    private void IniciarSecuenciaGameOver()
+    {
+        if (_viñetaCoroutine != null) StopCoroutine(_viñetaCoroutine);
+        _viñetaCoroutine = StartCoroutine(CoroutineGameOver());
+    }
+
+    private IEnumerator CoroutineGameOver()
+    {
+        _secuenciaActiva = true;
+
+        var gsm = GameStateManager.Instance;
+        if (gsm == null) { _secuenciaActiva = false; yield break; }
+
+        string eqA    = gsm.NombreEquipoA.ToString();
+        string eqB    = gsm.NombreEquipoB.ToString();
+        int    pA     = gsm.ScoreA;
+        int    pB     = gsm.ScoreB;
+        int    rondas = gsm.CurrentRound;
+        bool   empate = (pA == pB);
+
+        string txtGanador;
+        if      (empate)   txtGanador = $"Resultado increible!\nEmpate con {pA} puntos\npara ambos equipos!";
+        else if (pA > pB)  txtGanador = $"El equipo {eqA}\nes el GANADOR\ncon {pA} puntos!";
+        else               txtGanador = $"El equipo {eqB}\nes el GANADOR\ncon {pB} puntos!";
+
+        string[] display = {
+            $"Damos por terminadas\nlas {rondas} rondas!\nFue un gran juego!",
+            $"El marcador final:\n{eqA}: {pA} puntos\n{eqB}: {pB} puntos",
+            txtGanador
+        };
+        float[] durs = { 4f, 4.5f, 5f };
+        int total = display.Length;
+
+        // ── Pre-fetch TTS en paralelo ────────────────────────────────
+        var clips  = new AudioClip[total];
+        var listos = new bool[total];
+
+        if (TTSService.Instance != null)
+        {
+            for (int i = 0; i < total; i++)
+            {
+                int    idx = i;
+                string voz = display[idx].Replace("\n", " ").Trim();
+                TTSService.Instance.GenerarAudio(voz, c => { clips[idx] = c; listos[idx] = true; });
+            }
+        }
+        else { for (int i = 0; i < total; i++) listos[i] = true; }
+
+        // ── Reproducir cada página al llegar su clip ─────────────────
+        for (int i = 0; i < total; i++)
+        {
+            if (!_secuenciaActiva) break;
+
+            for (float t = 0f; !listos[i] && t < 10f; t += Time.deltaTime) yield return null;
+
+            Activar(viñetaEquipoA, textoEquipoA, display[i]);
+            Activar(viñetaEquipoB, textoEquipoB, display[i]);
+            Ocultar(viñetaPodio);
+            UIGameController.Instance?.ActualizarTextoAnimador(display[i]);
+            SetHablando(true);
+
+            if (clips[i] != null)
+            {
+                if (audioSource.clip != null && audioSource.clip.name == "tts_clip")
+                { var v = audioSource.clip; audioSource.clip = null; Destroy(v); }
+                audioSource.clip = clips[i];
+                audioSource.Play();
+                yield return new WaitForSeconds(clips[i].length + 0.4f);
+                audioSource.Stop();
+                Destroy(clips[i]);
+                clips[i] = null;
+            }
+            else
+            {
+                yield return new WaitForSeconds(durs[i]);
+            }
+
+            OcultarTodas();
+            SetHablando(false);
+            yield return new WaitForSeconds(pausaEntrePaginas);
+        }
+
+        OcultarTodas();
+        SetHablando(false);
+        _secuenciaActiva = false;
+
+        // Mostrar el panel de ganador en el HUD una vez termina el discurso
+        UIGameController.Instance?.MostrarPanelGanador();
     }
 
     // ─── Buzzer winner ────────────────────────────────────────────────

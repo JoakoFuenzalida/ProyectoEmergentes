@@ -17,8 +17,8 @@ public class GameStateManager : NetworkBehaviour
 {
     public static GameStateManager Instance { get; private set; }
 
-    private const int MAX_ERRORS   = 3;
-    private const int TOTAL_ROUNDS = 5;
+    private const int MAX_ERRORS = 3;
+    [SerializeField] private int totalRondasDefault = 5;
 
     public enum GameState
     {
@@ -57,6 +57,7 @@ public class GameStateManager : NetworkBehaviour
     [Networked] public int ScoreA { get; private set; }
     [Networked] public int ScoreB { get; private set; }
     [Networked] public int CurrentRound { get; private set; } = 1;
+    [Networked] public int TotalRondas  { get; set; }
 
     [Networked] public TickTimer Timer { get; private set; } 
     [Networked] public int BuzzerWinnerId { get; set; }
@@ -101,6 +102,10 @@ public class GameStateManager : NetworkBehaviour
     public static event Action<bool, int, string, string> OnAnswerResultEvent;
     // Avisa a los clientes cuando la pregunta networked llega/cambia
     public static event Action OnPreguntaActualizadaEvent;
+    // Avisa cuando TotalRondas o TurnDurationSeconds cambian (para refrescar UI de config)
+    public static event Action OnConfigChangedEvent;
+    // Llamado por TurnManager cuando TurnDurationSeconds cambia (los events no se pueden invocar desde fuera)
+    public static void FireConfigChanged() => OnConfigChangedEvent?.Invoke();
 
     private ChangeDetector _changes;
 
@@ -108,7 +113,9 @@ public class GameStateManager : NetworkBehaviour
 
     public override void Spawned()
     {
-        if (Instance == null) Instance = this;
+        // Siempre sobreescribir Instance: limpia referencias stale de sesiones anteriores.
+        // Si Despawned() no se llamó (edge case), esto garantiza que el nuevo GSM quede activo.
+        Instance = this;
         _changes = GetChangeDetector(ChangeDetector.Source.SimulationState);
 
         if (Object.HasStateAuthority)
@@ -116,6 +123,7 @@ public class GameStateManager : NetworkBehaviour
             ActiveTeam = TeamAssigner.TEAM_A;
             NombreEquipoA = "Equipo A";
             NombreEquipoB = "Equipo B";
+            TotalRondas   = totalRondasDefault;
 
             // El host genera preguntas IA automáticamente al entrar a la sala
             StartCoroutine(GenerarPreguntasIA());
@@ -152,11 +160,24 @@ public class GameStateManager : NetworkBehaviour
             });
     }
 
+    public override void Despawned(NetworkRunner runner, bool hasState)
+    {
+        // Limpiar referencia estática al despawnear para que la próxima sesión pueda registrarse.
+        if (Instance == this) Instance = null;
+    }
+
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void RPC_SetTeamName(int teamIndex, string newName)
     {
         if (teamIndex == 1) NombreEquipoA = newName;
         else if (teamIndex == 2) NombreEquipoB = newName;
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_SetTotalRondas(int rondas)
+    {
+        if (IsGameStarted) return;
+        TotalRondas = Mathf.Clamp(rondas, 1, 10);
     }
 
     public override void FixedUpdateNetwork()
@@ -213,7 +234,11 @@ public class GameStateManager : NetworkBehaviour
                 case nameof(RoundScore):
                 case nameof(NombreEquipoA):
                 case nameof(NombreEquipoB):
-                    OnTeamNamesUpdatedEvent?.Invoke(); 
+                    OnTeamNamesUpdatedEvent?.Invoke();
+                    break;
+
+                case nameof(TotalRondas):
+                    OnConfigChangedEvent?.Invoke();
                     break;
 
                 case nameof(BuzzerWinnerId):
@@ -396,7 +421,7 @@ public class GameStateManager : NetworkBehaviour
         else ScoreB += points;
 
         int nextRound = CurrentRound + 1;
-        if (nextRound > TOTAL_ROUNDS) CurrentState = GameState.GameOver;
+        if (nextRound > TotalRondas) CurrentState = GameState.GameOver;
         else
         {
             ActiveTeam = ActiveTeam.ToString() == TeamAssigner.TEAM_A ? TeamAssigner.TEAM_B : TeamAssigner.TEAM_A;
@@ -494,6 +519,18 @@ public class GameStateManager : NetworkBehaviour
         ApplyAnswerResult(PendingIsCorrect, PendingAnswerIndex, PendingPlayerId);
     }
 
+    /// <summary>Incrementa el contador de aciertos del jugador con el PlayerId dado.</summary>
+    private void IncrementarAciertos(int playerId)
+    {
+        foreach (var pRef in Runner.ActivePlayers)
+        {
+            if (pRef.PlayerId != playerId) continue;
+            var data = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>();
+            if (data != null) data.Aciertos++;
+            return;
+        }
+    }
+
     private static string Normalizar(string s) =>
         s.ToUpper().Trim()
          .Replace("Á","A").Replace("É","E").Replace("Í","I").Replace("Ó","O").Replace("Ú","U")
@@ -515,11 +552,12 @@ public class GameStateManager : NetworkBehaviour
         // ==========================================
         if (CurrentState == GameState.TypingAnswer && BuzzerWinnerId == playerId)
         {
-            if (isCorrect) 
-            { 
-                RevealedAnswersMask |= (1 << answerIndex); 
-                RegisterCorrectAnswer(PuntosRespuestas[answerIndex]); 
-                
+            if (isCorrect)
+            {
+                RevealedAnswersMask |= (1 << answerIndex);
+                RegisterCorrectAnswer(PuntosRespuestas[answerIndex]);
+                IncrementarAciertos(playerId);
+
                 PlayerNetworkData pData = null;
                 foreach (var pRef in Runner.ActivePlayers)
                 {
@@ -589,6 +627,7 @@ public class GameStateManager : NetworkBehaviour
                 {
                     RevealedAnswersMask |= (1 << answerIndex);
                     RegisterCorrectAnswer(PuntosRespuestas[answerIndex]);
+                    IncrementarAciertos(playerId);
 
                     int allAnswersMask = (1 << RespuestasValidas.Length) - 1;
                     if (RevealedAnswersMask == allAnswersMask)
@@ -620,10 +659,11 @@ public class GameStateManager : NetworkBehaviour
 
             if (esTurnoValido)
             {
-                if (isCorrect) 
-                { 
-                    RevealedAnswersMask |= (1 << answerIndex); 
-                    AwardPointsToTeam(ActiveTeam.ToString(), RoundScore + PuntosRespuestas[answerIndex]); 
+                if (isCorrect)
+                {
+                    RevealedAnswersMask |= (1 << answerIndex);
+                    AwardPointsToTeam(ActiveTeam.ToString(), RoundScore + PuntosRespuestas[answerIndex]);
+                    IncrementarAciertos(playerId);
                 }
                 else
                 {

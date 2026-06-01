@@ -35,15 +35,24 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
     public NetworkRunner Runner { get; private set; }
 
     private NetworkSceneManagerDefault _sceneManager;
+    private GameObject _runnerGO;   // GO hijo dedicado al runner (se destruye limpiamente entre sesiones)
     private bool _isConnecting = false;
+    private bool _goingToLobby = false;
     private readonly List<int> _availableSkinIndices = new List<int>(MAX_PLAYERS);
     private readonly Dictionary<PlayerRef, int> _assignedSkins = new Dictionary<PlayerRef, int>();
+
+    /// <summary>
+    /// Se dispara cuando el runner termina de cerrarse (salida intencional o kick).
+    /// UIGameController se suscribe para resetear la UI del juego al estado de lobby.
+    /// </summary>
+    public static event Action OnDisconnectedEvent;
 
     private void Awake()
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
-        DontDestroyOnLoad(gameObject);
+        // DontDestroyOnLoad eliminado: ya no recargamos la escena al salir,
+        // así que el RoomManager vive y muere con la escena normalmente.
     }
 
     private void Start()
@@ -101,33 +110,69 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
         Cursor.visible = false;
     }
 
+    /// <summary>
+    /// Cierra la sesión de red y regresa al lobby sin recargar la escena.
+    /// </summary>
+    public async void SalirAlLobby()
+    {
+        _goingToLobby = true;
+        if (Runner != null)
+            await Runner.Shutdown(); // OnShutdown dispara RetornarAlLobby()
+        else
+        {
+            _goingToLobby = false;
+            RetornarAlLobby();
+        }
+    }
+
+    private void RetornarAlLobby()
+    {
+        SetStatus("De vuelta al lobby. Puedes crear o unirte a una sala.");
+        if (lobbyPanel != null) lobbyPanel.SetActive(true);
+        if (roomPanel  != null) roomPanel.SetActive(false);
+        SetButtonsInteractable(true);
+        if (startGameButton != null) startGameButton.gameObject.SetActive(false);
+        OnDisconnectedEvent?.Invoke();
+    }
+
     private async Task StartFusionGame(GameMode mode, string roomCode)
     {
         if (_isConnecting) return;
         _isConnecting = true;
+        _goingToLobby = false; // Una nueva conexión no debe disparar RetornarAlLobby
 
         if (mode == GameMode.Host) ResetSkinPool();
 
-        // Limpiar runner anterior si existe
+        // Cerrar runner anterior si todavía existe (referencia activa)
         if (Runner != null)
         {
             await Runner.Shutdown();
-            if (Runner != null) Destroy(Runner);
             Runner = null;
         }
 
-        // Limpiar scene manager anterior para evitar duplicados
-        if (_sceneManager != null)
+        // Destruir el GO hijo del runner anterior (limpieza completa, sin timing issues).
+        // Destroy() es diferido pero el GO se destruye antes de que el usuario pueda volver a
+        // hacer click (al menos un frame), por lo que la creación a continuación es segura.
+        if (_runnerGO != null)
         {
-            Destroy(_sceneManager);
+            Destroy(_runnerGO);
+            _runnerGO     = null;
             _sceneManager = null;
         }
 
-        Runner = gameObject.AddComponent<NetworkRunner>();
+        // Resetear estado de equipos para que los jugadores puedan elegir de nuevo.
+        // Si no se limpia, TeamAssigner devuelve los equipos de la sesión anterior.
+        if (TeamAssigner.Instance != null) TeamAssigner.Instance.ResetForNewSession();
+
+        // Crear GO hijo dedicado para esta sesión (runner + sceneManager aislados)
+        _runnerGO = new GameObject("[NetworkRunner]");
+        _runnerGO.transform.SetParent(transform);
+
+        Runner = _runnerGO.AddComponent<NetworkRunner>();
         Runner.ProvideInput = true;
         Runner.AddCallbacks(this);
 
-        _sceneManager = gameObject.AddComponent<NetworkSceneManagerDefault>();
+        _sceneManager = _runnerGO.AddComponent<NetworkSceneManagerDefault>();
 
         var sceneRef = SceneRef.FromIndex(SceneManager.GetActiveScene().buildIndex);
         var sceneInfo = new NetworkSceneInfo();
@@ -189,16 +234,32 @@ public class RoomManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
     {
-        SetStatus($"Desconectado: {shutdownReason}");
-        lobbyPanel.SetActive(true);
-        roomPanel.SetActive(false);
-        SetButtonsInteractable(true);
-        if (startGameButton != null) startGameButton.gameObject.SetActive(false);
+        bool wasIntentional = _goingToLobby;
+        _goingToLobby   = false;
+        _isConnecting   = false;
+
+        // Limpiar referencias y destruir el GO hijo del runner
+        if (Runner == runner) Runner = null;
+        _sceneManager = null;
+        if (_runnerGO != null) { Destroy(_runnerGO); _runnerGO = null; }
+
+        // Mostrar lobby si: el jugador lo pidió (SalirAlLobby) O fue una desconexión inesperada
+        bool fueInesperado = shutdownReason != ShutdownReason.Ok;
+        if (wasIntentional || fueInesperado)
+        {
+            if (fueInesperado && !wasIntentional)
+                SetStatus($"Desconectado inesperadamente: {shutdownReason}");
+            RetornarAlLobby();
+        }
     }
 
     // CORRECCIÓN DE ALERTAS AMARILLAS EN UNITY
     void INetworkRunnerCallbacks.OnConnectedToServer(NetworkRunner runner) => SetStatus("Conectado.");
-    void INetworkRunnerCallbacks.OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason) => SetStatus($"Desconectado: {reason}");
+    void INetworkRunnerCallbacks.OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason)
+    {
+        // Solo actualiza el texto; OnShutdown (que dispara a continuación) maneja el resto
+        SetStatus($"Desconectado: {reason}");
+    }
     
     public void OnConnectFailed(NetworkRunner runner, NetAddress remoteAddress, NetConnectFailedReason reason) => SetStatus($"Conexión fallida: {reason}");
     public void OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token) { }
