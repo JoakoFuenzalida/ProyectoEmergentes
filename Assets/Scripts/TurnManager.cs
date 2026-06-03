@@ -26,8 +26,16 @@ public class TurnManager : NetworkBehaviour
     public bool IsLocalPlayersTurn =>
         Runner != null && ActivePlayer == Runner.LocalPlayer;
 
-    public float TurnTimeNormalized =>
-        TurnDurationSeconds > 0 ? Mathf.Clamp01(TurnTimeLeft / (float)TurnDurationSeconds) : 0f;
+    public float TurnTimeNormalized
+    {
+        get
+        {
+            // Usar TurnDurationSeconds networked; si aún no sincronizó (= 0),
+            // caer al default local para que el slider no aparezca siempre vacío.
+            int dur = TurnDurationSeconds > 0 ? TurnDurationSeconds : turnDurationDefault;
+            return dur > 0 ? Mathf.Clamp01(TurnTimeLeft / (float)dur) : 0f;
+        }
+    }
 
     // TODO: Chat — habilitar input de chat solo para el equipo activo al cambiar turno
     public static event Action<PlayerRef> OnTurnChangedEvent;

@@ -208,7 +208,6 @@ public class GameStateManager : NetworkBehaviour
             {
                 CurrentQuestionIndex = (CurrentQuestionIndex + 1) % (BancoActivo != null && BancoActivo.Length > 0 ? BancoActivo.Length : 1);
                 SincronizarPreguntaActual();
-
                 CurrentState = GameState.Countdown;
                 Timer = TickTimer.CreateFromSeconds(Runner, 5.0f);
                 BuzzerWinnerId = -1;
@@ -342,6 +341,19 @@ public class GameStateManager : NetworkBehaviour
     }
 
     // ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Anuncia al animador cuántas respuestas tiene la pregunta actual.
+    /// Se llama justo antes de pasar al estado Countdown.
+    /// </summary>
+    private void AnunciarCantidadRespuestas(int esRonda)
+    {
+        if (BancoActivo == null || BancoActivo.Length == 0) return;
+        int n = BancoActivo[CurrentQuestionIndex].Respuestas.Length;
+        string plural = n == 1 ? "respuesta" : "respuestas";
+        string msg = $"¡Ronda {esRonda}!\nEsta pregunta tiene\n{n} {plural}.";
+        ActualizarMensajeAnimador(msg);
+    }
 
     /// <summary>
     /// Llamado por AnimadorController (solo host) cuando termina la secuencia de intro.

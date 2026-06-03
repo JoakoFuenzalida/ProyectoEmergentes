@@ -802,24 +802,40 @@ public class UIGameController : MonoBehaviour
 
         if (isServerReady && panelRespuestas != null && panelRespuestas.activeSelf)
         {
-            int mask = GameStateManager.Instance.RevealedAnswersMask;
+            int mask          = GameStateManager.Instance.RevealedAnswersMask;
             string[] correctas = GameStateManager.Instance.RespuestasValidas;
-            int[] puntos = GameStateManager.Instance.PuntosRespuestas;
+            int[] puntos       = GameStateManager.Instance.PuntosRespuestas;
+            int totalResp      = (correctas != null) ? correctas.Length : 0;
 
             for (int i = 0; i < 8; i++)
             {
-                if (casillasRespuestas[i] != null && casillasPuntos[i] != null)
+                if (casillasRespuestas[i] == null || casillasPuntos[i] == null) continue;
+
+                // Mostrar la fila solo si hay una respuesta real para ese índice
+                bool filaActiva = i < totalResp;
+
+                // Intentar ocultar el padre (la fila completa) para que el layout se reajuste
+                var filaGO = casillasRespuestas[i].transform.parent?.gameObject;
+                if (filaGO != null && filaGO != panelRespuestas)
+                    filaGO.SetActive(filaActiva);
+                else
                 {
-                    if (i < correctas.Length && (mask & (1 << i)) != 0)
-                    {
-                        casillasRespuestas[i].text = correctas[i];
-                        casillasPuntos[i].text = puntos[i].ToString();
-                    }
-                    else
-                    {
-                        casillasRespuestas[i].text = $"--- {i + 1} ---";
-                        casillasPuntos[i].text = "--";
-                    }
+                    // Fallback: ocultar los textos directamente
+                    casillasRespuestas[i].gameObject.SetActive(filaActiva);
+                    casillasPuntos[i].gameObject.SetActive(filaActiva);
+                }
+
+                if (!filaActiva) continue;
+
+                if (i < correctas.Length && (mask & (1 << i)) != 0)
+                {
+                    casillasRespuestas[i].text = correctas[i];
+                    casillasPuntos[i].text     = puntos[i].ToString();
+                }
+                else
+                {
+                    casillasRespuestas[i].text = $"--- {i + 1} ---";
+                    casillasPuntos[i].text     = "--";
                 }
             }
         }

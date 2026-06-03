@@ -260,11 +260,22 @@ public class AnimadorController : MonoBehaviour
     {
         _secuenciaActiva = true;
 
-        var gsm  = GameStateManager.Instance;
+        var gsm   = GameStateManager.Instance;
         int ronda = gsm != null ? gsm.CurrentRound : 1;
 
+        // Contar respuestas reales de la pregunta actual
+        int numResp = 0;
+        if (gsm != null)
+        {
+            var resp = gsm.RespuestasValidas;
+            numResp = (resp != null) ? resp.Length : 0;
+        }
+        string respTxt = numResp > 0
+            ? $"Tiene {numResp} respuesta{(numResp != 1 ? "s" : "")}."
+            : "¡Lean la pregunta!";
+
         yield return StartCoroutine(Pagina(
-            $"¡Ronda {ronda}!\nLean la pregunta arriba.\n¡Prepárense para el buzzer!", 4f));
+            $"¡Ronda {ronda}!\n{respTxt}\n¡Prepárense para el buzzer!", 4f));
 
         OcultarTodas();
         SetHablando(false);
