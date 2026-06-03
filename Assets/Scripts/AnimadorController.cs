@@ -109,12 +109,20 @@ public class AnimadorController : MonoBehaviour
 
             case GameStateManager.GameState.Playing:
             case GameStateManager.GameState.Stealing:
-            case GameStateManager.GameState.RoundEnd:
                 // Liberar la bandera para que OnMensajeIA pueda mostrar viñetas en juego
                 _secuenciaActiva = false;
                 _enPodio = false;
                 TeleportarA(posEstudio);
                 Ocultar(viñetaPodio);
+                break;
+
+            case GameStateManager.GameState.RoundEnd:
+                _secuenciaActiva = false;
+                DetenerViñeta();
+                _enPodio = false;
+                TeleportarA(posEstudio);
+                Ocultar(viñetaPodio);
+                IniciarSecuenciaRoundEnd();
                 break;
 
             case GameStateManager.GameState.GameOver:
@@ -280,6 +288,76 @@ public class AnimadorController : MonoBehaviour
         OcultarTodas();
         SetHablando(false);
         _secuenciaActiva = false;
+    }
+
+    // ─── Secuencia de fin de ronda: revelación de respuestas ─────────
+
+    private void IniciarSecuenciaRoundEnd()
+    {
+        if (_viñetaCoroutine != null) StopCoroutine(_viñetaCoroutine);
+        _viñetaCoroutine = StartCoroutine(CoroutineRoundEnd());
+    }
+
+    private IEnumerator CoroutineRoundEnd()
+    {
+        _secuenciaActiva = true;
+
+        var gsm = GameStateManager.Instance;
+        if (gsm == null) { _secuenciaActiva = false; yield break; }
+
+        bool esHost = gsm.Object != null && gsm.Object.HasStateAuthority;
+
+        // Esperar un frame para que el estado de red esté estabilizado
+        yield return null;
+
+        string[] respuestas = gsm.RespuestasValidas;
+        int[]    puntos     = gsm.PuntosRespuestas;
+        int      mask       = gsm.RevealedAnswersMask;
+
+        // Construir lista de respuestas aún NO reveladas
+        var sinRevelar = new System.Collections.Generic.List<(int idx, string nombre, int pts)>();
+        if (respuestas != null)
+        {
+            for (int i = 0; i < respuestas.Length; i++)
+            {
+                if ((mask & (1 << i)) == 0)
+                    sinRevelar.Add((i, respuestas[i],
+                        puntos != null && i < puntos.Length ? puntos[i] : 0));
+            }
+        }
+
+        if (sinRevelar.Count > 0)
+        {
+            // Ordenar de menor a mayor puntaje
+            sinRevelar.Sort((a, b) => a.pts.CompareTo(b.pts));
+
+            string pregunta = gsm.PreguntaActual;
+            string intro = sinRevelar.Count == 1
+                ? $"¡Quedó 1 respuesta\nsin revelar!\n\"{pregunta}\"\n¡DÁMELA!"
+                : $"¡Quedaron {sinRevelar.Count} respuestas\nsin revelar!\n\"{pregunta}\"\n¡DÁMELAS!";
+
+            yield return StartCoroutine(Pagina(intro, 4.5f));
+
+            // Revelar una a una con TTS
+            foreach (var (idx, nombre, pts) in sinRevelar)
+            {
+                if (!_secuenciaActiva) break;
+
+                // Solo el host actualiza la máscara en red → todos ven el tablero
+                if (esHost && gsm.Object != null && gsm.Object.HasStateAuthority)
+                    gsm.RevealedAnswersMask |= (1 << idx);
+
+                yield return StartCoroutine(Pagina($"¡{nombre}!\n{pts} punto{(pts != 1 ? "s" : "")}.", 2.5f));
+            }
+        }
+
+        OcultarTodas();
+        SetHablando(false);
+        _secuenciaActiva = false;
+
+        // El host avanza a la siguiente ronda
+        if (esHost && gsm.Object != null && gsm.Object.HasStateAuthority)
+            gsm.TerminarRoundEnd();
     }
 
     // ─── Secuencia de cierre (Game Over) ─────────────────────────────

@@ -11,7 +11,8 @@ public class TurnManager : NetworkBehaviour
     [Networked] public float     TurnTimeLeft  { get; private set; }
 
     [Header("Configuración de turno")]
-    [SerializeField] private int turnDurationDefault = 30;
+    [SerializeField] private int turnDurationDefault  = 30;
+    [SerializeField] private int buzzerDurationSeconds = 10; // segundos para responder en el podio
     [Networked] public int TurnDurationSeconds { get; set; }
 
     private Dictionary<string, int> _teamTurnIndex = new Dictionary<string, int>
@@ -59,13 +60,30 @@ public class TurnManager : NetworkBehaviour
     public override void FixedUpdateNetwork()
     {
         if (!Object.HasStateAuthority || !_timerRunning) return;
+
+        // Pausar mientras el animador evalúa (evita X falsas durante el suspenso)
+        if (GameStateManager.Instance != null && GameStateManager.Instance.IsEvaluating) return;
+
         TurnTimeLeft -= Runner.DeltaTime;
         if (TurnTimeLeft <= 0f)
         {
             _timerRunning = false;
             TurnTimeLeft  = 0f;
-            Debug.Log("[TurnManager] Tiempo agotado → respuesta incorrecta.");
-            GameStateManager.Instance.RegisterWrongAnswer();
+
+            var gsm = GameStateManager.Instance;
+            if (gsm == null) return;
+
+            if (gsm.CurrentState == GameStateManager.GameState.TypingAnswer)
+            {
+                // Tiempo del buzzer agotado → turno al rival (sin X para el equipo)
+                Debug.Log("[TurnManager] Tiempo buzzer agotado → turno al rival.");
+                gsm.TimeoutBuzzer();
+            }
+            else
+            {
+                Debug.Log("[TurnManager] Tiempo agotado → respuesta incorrecta.");
+                gsm.RegisterWrongAnswer();
+            }
         }
     }
 
@@ -138,6 +156,18 @@ public class TurnManager : NetworkBehaviour
         TurnTimeLeft = TurnDurationSeconds;
         _timerRunning = true;
     }
+    /// <summary>
+    /// Inicia el timer corto del podio (10 s por defecto).
+    /// Solo corre en el host; TurnTimeLeft se replica a clientes.
+    /// </summary>
+    public void IniciarTimerBuzzer()
+    {
+        if (!Object.HasStateAuthority) return;
+        ActivePlayer  = PlayerRef.None; // el turno en el podio lo controla BuzzerWinnerId
+        TurnTimeLeft  = buzzerDurationSeconds;
+        _timerRunning = true;
+    }
+
     public void ResetTurnIndices()
     {
         _teamTurnIndex[TeamAssigner.TEAM_A] = 0;

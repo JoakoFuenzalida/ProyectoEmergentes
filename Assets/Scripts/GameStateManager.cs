@@ -205,15 +205,7 @@ public class GameStateManager : NetworkBehaviour
             }
 
             if (CurrentState == GameState.RoundEnd && Timer.Expired(Runner))
-            {
-                CurrentQuestionIndex = (CurrentQuestionIndex + 1) % (BancoActivo != null && BancoActivo.Length > 0 ? BancoActivo.Length : 1);
-                SincronizarPreguntaActual();
-                CurrentState = GameState.Countdown;
-                Timer = TickTimer.CreateFromSeconds(Runner, 5.0f);
-                BuzzerWinnerId = -1;
-                RevealedAnswersMask = 0;
-                FaceOffChanceUsed = false;
-            }
+                AvanzarDesdeRoundEnd(); // safety fallback si AnimadorController no llamó TerminarRoundEnd
         }
     }
 
@@ -368,6 +360,29 @@ public class GameStateManager : NetworkBehaviour
         Timer = TickTimer.CreateFromSeconds(Runner, 5.0f);
     }
 
+    /// <summary>
+    /// Llamado por AnimadorController cuando termina la secuencia de revelación de respuestas.
+    /// Avanza a la siguiente ronda. El timer de 60s en RoundEnd es solo safety fallback.
+    /// </summary>
+    public void TerminarRoundEnd()
+    {
+        if (!Object.HasStateAuthority) return;
+        if (CurrentState != GameState.RoundEnd) return;
+        Timer = TickTimer.None;
+        AvanzarDesdeRoundEnd();
+    }
+
+    private void AvanzarDesdeRoundEnd()
+    {
+        CurrentQuestionIndex = (CurrentQuestionIndex + 1) % (BancoActivo != null && BancoActivo.Length > 0 ? BancoActivo.Length : 1);
+        SincronizarPreguntaActual();
+        CurrentState        = GameState.Countdown;
+        Timer               = TickTimer.CreateFromSeconds(Runner, 5.0f);
+        BuzzerWinnerId      = -1;
+        RevealedAnswersMask = 0;
+        FaceOffChanceUsed   = false;
+    }
+
     public void StartGame()
     {
         if (!Object.HasStateAuthority) return;
@@ -401,10 +416,17 @@ public class GameStateManager : NetworkBehaviour
         int newErrors = ErrorCount + 1;
         if (newErrors >= MAX_ERRORS)
         {
+            string failNombre   = ActiveTeam.ToString() == "A" ? NombreEquipoA.ToString() : NombreEquipoB.ToString();
             string stealingTeam = ActiveTeam.ToString() == TeamAssigner.TEAM_A ? TeamAssigner.TEAM_B : TeamAssigner.TEAM_A;
+            string stealNombre  = stealingTeam == "A" ? NombreEquipoA.ToString() : NombreEquipoB.ToString();
+
             ErrorCount   = newErrors;
             ActiveTeam   = stealingTeam;
             CurrentState = GameState.Stealing;
+
+            // Sobreescribe el "¡Incorrecto!" del mismo tick con el anuncio de robo
+            ActualizarMensajeAnimador(
+                $"¡{failNombre} falló 3 veces!\n¡{stealNombre} puede robar\n{RoundScore} puntos!");
 
             int otroJugadorId = -1;
             foreach (var player in Runner.ActivePlayers)
@@ -439,7 +461,7 @@ public class GameStateManager : NetworkBehaviour
             ActiveTeam = ActiveTeam.ToString() == TeamAssigner.TEAM_A ? TeamAssigner.TEAM_B : TeamAssigner.TEAM_A;
             RoundScore = 0; ErrorCount = 0; CurrentRound = nextRound; 
             CurrentState = GameState.RoundEnd;
-            Timer = TickTimer.CreateFromSeconds(Runner, 4.0f); 
+            Timer = TickTimer.CreateFromSeconds(Runner, 60.0f); // safety; AnimadorController llama TerminarRoundEnd() antes
         }
     }
 
@@ -450,7 +472,54 @@ public class GameStateManager : NetworkBehaviour
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void RPC_PressBuzzer(int playerId)
     {
-        if (CurrentState == GameState.WaitingForBuzzer) { BuzzerWinnerId = playerId; CurrentState = GameState.TypingAnswer; }
+        if (CurrentState == GameState.WaitingForBuzzer)
+        {
+            BuzzerWinnerId = playerId;
+            CurrentState   = GameState.TypingAnswer;
+            // Iniciar timer corto del buzzer (10 s)
+            TurnManager.Instance?.IniciarTimerBuzzer();
+        }
+    }
+
+    /// <summary>
+    /// Llamado por TurnManager cuando el timer del buzzer expira.
+    /// No suma X al equipo — solo pasa el turno al rival del podio.
+    /// </summary>
+    public void TimeoutBuzzer()
+    {
+        if (!Object.HasStateAuthority) return;
+        if (CurrentState != GameState.TypingAnswer) return;
+
+        int playerId = BuzzerWinnerId;
+
+        if (!FaceOffChanceUsed)
+        {
+            // Primera vez: dar oportunidad al rival
+            FaceOffChanceUsed = true;
+            int otroJugadorId = -1;
+            foreach (var pRef in Runner.ActivePlayers)
+                if (pRef.PlayerId != playerId) { otroJugadorId = pRef.PlayerId; break; }
+
+            if (otroJugadorId != -1)
+            {
+                BuzzerWinnerId = otroJugadorId;
+                TurnManager.Instance?.IniciarTimerBuzzer(); // el rival también tiene 10 s
+            }
+            else
+            {
+                // Sin rival → ir directo a Playing
+                CurrentState = GameState.Playing;
+                TurnManager.Instance?.ResetTurnIndices();
+                TurnManager.Instance?.AdvanceTurnInTeam(ActiveTeam.ToString());
+            }
+        }
+        else
+        {
+            // Ambos agotaron su tiempo → ir a Playing sin X
+            CurrentState = GameState.Playing;
+            TurnManager.Instance?.ResetTurnIndices();
+            TurnManager.Instance?.AdvanceTurnInTeam(ActiveTeam.ToString());
+        }
     }
 
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
@@ -555,7 +624,20 @@ public class GameStateManager : NetworkBehaviour
                     && answerIndex < BancoActivo[CurrentQuestionIndex].Puntos.Length)
                     ? BancoActivo[CurrentQuestionIndex].Puntos[answerIndex] : 0;
         PendingResultPoints = rPts;
-        string msgResult = isCorrect ? $"¡CORRECTO!\n+{rPts} puntos!" : "¡Incorrecto!\n¡X roja!";
+
+        // Mensaje contextual: en fase de robo informa quién robó o quién ganó los puntos
+        string msgResult;
+        if (CurrentState == GameState.Stealing)
+        {
+            string ladronNombre  = ActiveTeam.ToString() == "A" ? NombreEquipoA.ToString() : NombreEquipoB.ToString();
+            string victimaNombre = ActiveTeam.ToString() == "A" ? NombreEquipoB.ToString() : NombreEquipoA.ToString();
+            msgResult = isCorrect
+                ? $"¡{ladronNombre} roba\n{RoundScore + rPts} puntos\nde {victimaNombre}!"
+                : $"¡{ladronNombre} falló!\n¡{victimaNombre} se lleva\nlos {RoundScore} puntos!";
+        }
+        else
+            msgResult = isCorrect ? $"¡CORRECTO!\n+{rPts} puntos!" : "¡Incorrecto!\n¡X roja!";
+
         ActualizarMensajeAnimador(msgResult);
         _answerResultVersion++;
 
@@ -592,7 +674,7 @@ public class GameStateManager : NetworkBehaviour
             else 
             {
                 RPC_ShowTemporaryStrike(); 
-                if (!FaceOffChanceUsed) 
+                if (!FaceOffChanceUsed)
                 {
                     FaceOffChanceUsed = true;
                     int otroJugadorId = -1;
@@ -601,7 +683,11 @@ public class GameStateManager : NetworkBehaviour
                         if (pRef.PlayerId != playerId) { otroJugadorId = pRef.PlayerId; break; }
                     }
 
-                    if (otroJugadorId != -1) BuzzerWinnerId = otroJugadorId;
+                    if (otroJugadorId != -1)
+                    {
+                        BuzzerWinnerId = otroJugadorId;
+                        TurnManager.Instance?.IniciarTimerBuzzer(); // rival también tiene 10 s
+                    }
                     else
                     {
                         CurrentState = GameState.Playing;

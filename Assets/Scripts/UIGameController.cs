@@ -96,6 +96,10 @@ public class UIGameController : MonoBehaviour
     [SerializeField] private TMP_Text   textoAnimador;
     [SerializeField] private TMP_Text   textoEstadoGeneracion; // opcional: muestra "Generando preguntas..."
 
+    [Header("Audio UI")]
+    [SerializeField] private AudioSource audioSourceUI;
+    [SerializeField] private AudioClip   dingCorrectClip; // Assets/Audio/dingCorrect.mp3
+
     [Header("Start Screen")]
     [SerializeField] private GameObject panelStartScreen;
     [SerializeField] private TMP_Text   textoPresionaTecla;
@@ -106,9 +110,19 @@ public class UIGameController : MonoBehaviour
     [Range(0f, 1f)] [SerializeField] private float musicaLobbyVolumen = 0.12f;
     [SerializeField] private float musicaLobbyFadeSegundos = 1.2f;
 
+    [Header("Música de Juego")]
+    [SerializeField] private AudioSource musicaJuegoSource;    // AudioSource para SongMainJuego
+    [SerializeField] private AudioClip   musicaJuegoClip;      // SongMainJuego.mp3
+    [Range(0f, 1f)] [SerializeField] private float musicaJuegoVolumen = 0.12f;
+    [SerializeField] private AudioSource musicaSuspensoSource; // AudioSource para song10sg
+    [SerializeField] private AudioClip   musicaSuspensoClip;   // song10sg.mp3
+    [Range(0f, 1f)] [SerializeField] private float musicaSuspensoVolumen = 0.20f;
+
     private float localTimer = 0f;
     private bool isCounting = false;
+    private int  _prevRevealedMask = 0; // detecta nuevas respuestas reveladas para el ding
     private bool isPaused = false;
+    private bool _suspensoActivo = false;
     private CursorLockMode previousLockMode;
     private bool previousCursorVisible;
 
@@ -528,9 +542,12 @@ public class UIGameController : MonoBehaviour
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
         }
-        else if (GameStateManager.Instance != null)
+        else
         {
-            HandleStateChanged(GameStateManager.Instance.CurrentState);
+            // Respuesta revelada → detener suspenso y reanudar música de juego
+            DetenerSuspenso();
+            if (GameStateManager.Instance != null)
+                HandleStateChanged(GameStateManager.Instance.CurrentState);
         }
     }
 
@@ -550,6 +567,7 @@ public class UIGameController : MonoBehaviour
         switch (newState)
         {
             case GameStateManager.GameState.Intro:
+                IniciarMusicaJuego(); // cambia de música de lobby a música de juego
                 if (lobbyPanel) lobbyPanel.SetActive(false);
                 if (roomPanel) roomPanel.SetActive(false);
                 if (panelPregunta) panelPregunta.SetActive(false);
@@ -569,6 +587,7 @@ public class UIGameController : MonoBehaviour
                 break;
 
             case GameStateManager.GameState.Countdown:
+                _prevRevealedMask = 0; // nueva ronda → resetear detección de ding
                 if (lobbyPanel) lobbyPanel.SetActive(false);
                 if (roomPanel) roomPanel.SetActive(false);
                 if (panelPregunta) panelPregunta.SetActive(true);
@@ -604,6 +623,8 @@ public class UIGameController : MonoBehaviour
                 break;
 
             case GameStateManager.GameState.GameOver:
+                DetenerSuspenso();
+                if (musicaJuegoSource != null) musicaJuegoSource.Stop();
                 isCounting = false;
                 _buzzerRetryFrames = 0;
                 _esMiTurnoActual = false;
@@ -628,6 +649,9 @@ public class UIGameController : MonoBehaviour
                 break;
 
             case GameStateManager.GameState.WaitingForPlayers:
+                DetenerSuspenso();
+                if (musicaJuegoSource != null) musicaJuegoSource.Stop();
+                BajarMusicaParaLobby(); // retomar SongMain al volver al lobby
                 isCounting = false;
                 _buzzerRetryFrames = 0;
                 if (lobbyPanel) lobbyPanel.SetActive(true);
@@ -803,6 +827,13 @@ public class UIGameController : MonoBehaviour
         if (isServerReady && panelRespuestas != null && panelRespuestas.activeSelf)
         {
             int mask          = GameStateManager.Instance.RevealedAnswersMask;
+
+            // Reproducir ding cuando se revela una nueva respuesta correcta
+            // (funciona tanto en juego como en la revelación al final de ronda)
+            int nuevasBits = mask & ~_prevRevealedMask;
+            if (nuevasBits != 0 && audioSourceUI != null && dingCorrectClip != null)
+                audioSourceUI.PlayOneShot(dingCorrectClip);
+            _prevRevealedMask = mask;
             string[] correctas = GameStateManager.Instance.RespuestasValidas;
             int[] puntos       = GameStateManager.Instance.PuntosRespuestas;
             int totalResp      = (correctas != null) ? correctas.Length : 0;
@@ -864,18 +895,30 @@ public class UIGameController : MonoBehaviour
 
         // Panel contenedor (si existe) — lo muestra/oculta completo
         if (panelTiempoTurno != null) panelTiempoTurno.SetActive(activo);
-        // Texto y slider se controlan siempre de forma independiente
-        // (pueden estar dentro o fuera del panel)
-        if (textoTiempoTurno != null && panelTiempoTurno == null)
-            textoTiempoTurno.gameObject.SetActive(activo);
-        if (sliderTiempo != null) sliderTiempo.gameObject.SetActive(activo);
+        // Texto y slider SIEMPRE se gestionan de forma explícita:
+        // si el texto fue ocultado explícitamente (ej. en MostrarPanelGanador),
+        // activar el panel padre no lo muestra automáticamente en Unity.
+        if (textoTiempoTurno != null) textoTiempoTurno.gameObject.SetActive(activo);
+        if (sliderTiempo     != null) sliderTiempo.gameObject.SetActive(activo);
 
-        if (!activo) return;
+        // Cuando el timer deja de estar activo (RoundEnd, Lobby, etc.) → detener suspenso
+        if (!activo)
+        {
+            DetenerSuspenso();
+            return;
+        }
 
         float tiempoRestante  = TurnManager.Instance.TurnTimeLeft;
         float normalizado     = TurnManager.Instance.TurnTimeNormalized;
         bool  urgente         = tiempoRestante <= umbralUrgente;
         Color color           = urgente ? colorUrgente : colorNormal;
+
+        // ── Música de suspenso ────────────────────────────────────────
+        bool isEval = GameStateManager.Instance != null && GameStateManager.Instance.IsEvaluating;
+        if (urgente && !_suspensoActivo)
+            IniciarSuspenso();
+        else if (!urgente && _suspensoActivo && !isEval)
+            DetenerSuspenso();
 
         // Texto con segundos restantes
         if (textoTiempoTurno != null)
@@ -986,6 +1029,64 @@ public class UIGameController : MonoBehaviour
             yield return null;
         }
         musicaInicioSource.volume = targetVolume;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  Música de juego y suspenso
+    // ══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Detiene la música de lobby y arranca SongMainJuego al mismo volumen.
+    /// Se llama al pasar al estado Intro (inicio de partida).
+    /// </summary>
+    private void IniciarMusicaJuego()
+    {
+        // Detener música de lobby/inicio
+        if (_fadeMusicCoroutine != null) StopCoroutine(_fadeMusicCoroutine);
+        if (musicaInicioSource != null) musicaInicioSource.Stop();
+
+        if (musicaJuegoSource == null || musicaJuegoClip == null) return;
+        musicaJuegoSource.clip   = musicaJuegoClip;
+        musicaJuegoSource.volume = musicaJuegoVolumen;
+        musicaJuegoSource.loop   = true;
+        if (!musicaJuegoSource.isPlaying) musicaJuegoSource.Play();
+    }
+
+    /// <summary>
+    /// Pausa SongMainJuego y arranca la música de suspenso (últimos 10 s).
+    /// </summary>
+    private void IniciarSuspenso()
+    {
+        if (_suspensoActivo) return;
+        _suspensoActivo = true;
+
+        if (musicaJuegoSource != null && musicaJuegoSource.isPlaying)
+            musicaJuegoSource.Pause();
+
+        if (musicaSuspensoSource != null && musicaSuspensoClip != null)
+        {
+            musicaSuspensoSource.clip   = musicaSuspensoClip;
+            musicaSuspensoSource.volume = musicaSuspensoVolumen;
+            musicaSuspensoSource.loop   = false;
+            if (!musicaSuspensoSource.isPlaying) musicaSuspensoSource.Play();
+        }
+    }
+
+    /// <summary>
+    /// Detiene la música de suspenso y reanuda SongMainJuego.
+    /// Se llama al revelar la respuesta o al cambiar de ronda.
+    /// </summary>
+    private void DetenerSuspenso()
+    {
+        if (!_suspensoActivo) return;
+        _suspensoActivo = false;
+
+        if (musicaSuspensoSource != null && musicaSuspensoSource.isPlaying)
+            musicaSuspensoSource.Stop();
+
+        if (musicaJuegoSource != null && !musicaJuegoSource.isPlaying
+            && musicaJuegoSource.clip != null)
+            musicaJuegoSource.UnPause();
     }
 
     // ══════════════════════════════════════════════════════════════
