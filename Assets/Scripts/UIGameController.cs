@@ -63,9 +63,15 @@ public class UIGameController : MonoBehaviour
     [SerializeField] private TMP_InputField inputRespuesta;
     [SerializeField] private TMP_Text textoPreguntaPrincipal;
 
-    [Header("Tablero de 8 Casillas")]
+    [Header("Tablero de 8 Casillas (HUD 2D)")]
     [SerializeField] private TMP_Text[] casillasRespuestas = new TMP_Text[8];
     [SerializeField] private TMP_Text[] casillasPuntos = new TMP_Text[8];
+
+    [Header("Tablero 3D Family Feud")]
+    [SerializeField] private GameObject tableroPanel3D;             // contenedor de textos 3D (hijo de la pantalla)
+    [SerializeField] private TMP_Text[] tableroRespuestas3D = new TMP_Text[8]; // textos de respuestas
+    [SerializeField] private TMP_Text[] tableroPuntos3D     = new TMP_Text[8]; // textos de puntos
+    [SerializeField] private TMP_Text   tableroPregunta3D;          // texto de la pregunta (opcional)
 
     [Header("Temporizador de turno")]
     [SerializeField] private GameObject panelTiempoTurno;        // panel contenedor (se muestra/oculta completo)
@@ -123,6 +129,7 @@ public class UIGameController : MonoBehaviour
     private int  _prevRevealedMask = 0; // detecta nuevas respuestas reveladas para el ding
     private bool isPaused = false;
     private bool _suspensoActivo = false;
+    private bool _tableroMostrarPlaceholders = false; // false = slots vacíos, true = muestra "--- X ---"
     private CursorLockMode previousLockMode;
     private bool previousCursorVisible;
 
@@ -224,7 +231,7 @@ public class UIGameController : MonoBehaviour
     // Cuando la pregunta networked llega al cliente (puede ser más tarde que el cambio de estado)
     private void HandlePreguntaActualizada()
     {
-        if (textoPreguntaPrincipal == null || GameStateManager.Instance == null) return;
+        if (GameStateManager.Instance == null) return;
         var estado = GameStateManager.Instance.CurrentState;
         // Solo actualizar si estamos en una fase donde la pregunta debe verse
         if (estado == GameStateManager.GameState.Countdown  ||
@@ -235,7 +242,10 @@ public class UIGameController : MonoBehaviour
         {
             string pregunta = GameStateManager.Instance.PreguntaActual;
             if (!string.IsNullOrEmpty(pregunta) && pregunta != "Cargando...")
-                textoPreguntaPrincipal.text = pregunta;
+            {
+                if (textoPreguntaPrincipal != null) textoPreguntaPrincipal.text = pregunta;
+                if (tableroPregunta3D     != null) tableroPregunta3D.text      = pregunta;
+            }
         }
     }
 
@@ -317,6 +327,13 @@ public class UIGameController : MonoBehaviour
     public void RefreshRoomUI()
     {
         if (GameStateManager.Instance == null || GameStateManager.Instance.Runner == null) return;
+
+        // Mostrar el tablero 3D en cuanto hay sala activa (lobby de sala y durante el juego)
+        if (tableroPanel3D != null && !tableroPanel3D.activeSelf)
+        {
+            tableroPanel3D.SetActive(true);
+            _tableroMostrarPlaceholders = false; // slots vacíos hasta que empiece la partida
+        }
 
         if (textoCodigoRoom != null)
             textoCodigoRoom.text = GameStateManager.Instance.Runner.SessionInfo.Name;
@@ -567,7 +584,8 @@ public class UIGameController : MonoBehaviour
         switch (newState)
         {
             case GameStateManager.GameState.Intro:
-                IniciarMusicaJuego(); // cambia de música de lobby a música de juego
+                IniciarMusicaJuego();
+                if (tableroPanel3D) tableroPanel3D.SetActive(false); // aún no hay pregunta en Intro
                 if (lobbyPanel) lobbyPanel.SetActive(false);
                 if (roomPanel) roomPanel.SetActive(false);
                 if (panelPregunta) panelPregunta.SetActive(false);
@@ -587,7 +605,9 @@ public class UIGameController : MonoBehaviour
                 break;
 
             case GameStateManager.GameState.Countdown:
-                _prevRevealedMask = 0; // nueva ronda → resetear detección de ding
+                _prevRevealedMask = 0;
+                _tableroMostrarPlaceholders = false; // slots vacíos hasta que el animador termine
+                if (tableroPanel3D) tableroPanel3D.SetActive(true);
                 if (lobbyPanel) lobbyPanel.SetActive(false);
                 if (roomPanel) roomPanel.SetActive(false);
                 if (panelPregunta) panelPregunta.SetActive(true);
@@ -612,6 +632,16 @@ public class UIGameController : MonoBehaviour
                 break;
 
             case GameStateManager.GameState.WaitingForBuzzer:
+                _tableroMostrarPlaceholders = true; // animador terminó → revelar "--- X ---"
+                isCounting = false;
+                _buzzerRetryFrames = 0;
+                if (panelCountdown) panelCountdown.SetActive(false);
+                if (inputRespuesta) inputRespuesta.gameObject.SetActive(false);
+                Cursor.lockState = CursorLockMode.Locked;
+                Cursor.visible = false;
+                _esMiTurnoActual = false;
+                break;
+
             case GameStateManager.GameState.RoundEnd:
                 isCounting = false;
                 _buzzerRetryFrames = 0;
@@ -625,6 +655,7 @@ public class UIGameController : MonoBehaviour
             case GameStateManager.GameState.GameOver:
                 DetenerSuspenso();
                 if (musicaJuegoSource != null) musicaJuegoSource.Stop();
+                if (tableroPanel3D) tableroPanel3D.SetActive(false);
                 isCounting = false;
                 _buzzerRetryFrames = 0;
                 _esMiTurnoActual = false;
@@ -651,7 +682,9 @@ public class UIGameController : MonoBehaviour
             case GameStateManager.GameState.WaitingForPlayers:
                 DetenerSuspenso();
                 if (musicaJuegoSource != null) musicaJuegoSource.Stop();
-                BajarMusicaParaLobby(); // retomar SongMain al volver al lobby
+                BajarMusicaParaLobby();
+                if (tableroPanel3D) tableroPanel3D.SetActive(false);
+                _tableroMostrarPlaceholders = false;
                 isCounting = false;
                 _buzzerRetryFrames = 0;
                 if (lobbyPanel) lobbyPanel.SetActive(true);
@@ -818,6 +851,10 @@ public class UIGameController : MonoBehaviour
 
         // ── Temporizador de turno ──────────────────────────────────────
         ActualizarTimerUI();
+
+        // ── Tablero 3D Family Feud ─────────────────────────────────────
+        if (tableroPanel3D != null && tableroPanel3D.activeSelf)
+            ActualizarTablero3D();
 
         // Actualización visual del tablero
         bool isServerReady = GameStateManager.Instance != null &&
@@ -1029,6 +1066,55 @@ public class UIGameController : MonoBehaviour
             yield return null;
         }
         musicaInicioSource.volume = targetVolume;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  Tablero 3D Family Feud
+    // ══════════════════════════════════════════════════════════════
+
+    private void ActualizarTablero3D()
+    {
+        bool gsOk = GameStateManager.Instance != null &&
+                    GameStateManager.Instance.Object != null &&
+                    GameStateManager.Instance.Object.IsValid;
+        if (!gsOk) return;
+
+        int      mask      = GameStateManager.Instance.RevealedAnswersMask;
+        string[] correctas = GameStateManager.Instance.RespuestasValidas;
+        int[]    puntos    = GameStateManager.Instance.PuntosRespuestas;
+        int      totalResp = correctas != null ? correctas.Length : 0;
+
+        for (int i = 0; i < 8; i++)
+        {
+            if (tableroRespuestas3D[i] == null) continue;
+
+            // Mostrar / ocultar fila según cantidad real de respuestas
+            bool filaActiva = i < totalResp;
+            var filaGO = tableroRespuestas3D[i].transform.parent?.gameObject;
+            if (filaGO != null && filaGO != tableroPanel3D)
+                filaGO.SetActive(filaActiva);
+
+            if (!filaActiva) continue;
+
+            if (i < correctas.Length && (mask & (1 << i)) != 0)
+            {
+                // Respuesta revelada
+                tableroRespuestas3D[i].text = correctas[i];
+                if (tableroPuntos3D[i] != null) tableroPuntos3D[i].text = puntos[i].ToString();
+            }
+            else if (_tableroMostrarPlaceholders)
+            {
+                // Animador ya anunció — mostrar casilla oculta numerada
+                tableroRespuestas3D[i].text = $"--- {i + 1} ---";
+                if (tableroPuntos3D[i] != null) tableroPuntos3D[i].text = "--";
+            }
+            else
+            {
+                // Countdown: slots completamente vacíos
+                tableroRespuestas3D[i].text = "";
+                if (tableroPuntos3D[i] != null) tableroPuntos3D[i].text = "";
+            }
+        }
     }
 
     // ══════════════════════════════════════════════════════════════
