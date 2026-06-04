@@ -104,7 +104,8 @@ public class UIGameController : MonoBehaviour
 
     [Header("Audio UI")]
     [SerializeField] private AudioSource audioSourceUI;
-    [SerializeField] private AudioClip   dingCorrectClip; // Assets/Audio/dingCorrect.mp3
+    [SerializeField] private AudioClip   dingCorrectClip;  // Assets/Audio/dingCorrect.mp3
+    [SerializeField] private AudioClip   wrongAnswerClip;  // arrastra el clip wrong-answer-buzzer aquí
 
     [Header("Start Screen")]
     [SerializeField] private GameObject panelStartScreen;
@@ -522,6 +523,9 @@ public class UIGameController : MonoBehaviour
     private void HandleTemporaryStrike()
     {
         if (textoStrikeGrande != null) textoStrikeGrande.text = "X";
+        // Reproducir sonido de fallo (también se usa cuando se acaba el tiempo)
+        if (audioSourceUI != null && wrongAnswerClip != null)
+            audioSourceUI.PlayOneShot(wrongAnswerClip);
         StartCoroutine(MostrarStrikeTemporal());
     }
 

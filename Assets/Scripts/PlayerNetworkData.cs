@@ -54,23 +54,37 @@ public class PlayerNetworkData : NetworkBehaviour
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
     public void RPC_JoinTeam(int team)
     {
+        int equipoAnterior = TeamIndex;
         TeamIndex = team;
+        IsReady   = false;
 
-        // BUG FIX: Contar asientos ocupados de forma segura
-        // Antes podía haber race condition si dos jugadores entraban al mismo equipo simultáneamente
-        // porque ambos leían el mismo valor antes de que el otro escribiera
-        int takenSeats = 0;
+        // ── Recompactar el equipo anterior ───────────────────────────────────
+        // Cuando alguien deja un equipo, los SeatIndex del resto pueden quedar
+        // con huecos (ej: 0, 2 en vez de 0, 1) rompiendo los turnos del podio.
+        if (equipoAnterior != 0 && equipoAnterior != team)
+        {
+            var miembrosViejos = new System.Collections.Generic.List<PlayerNetworkData>();
+            foreach (var player in Runner.ActivePlayers)
+            {
+                var data = Runner.GetPlayerObject(player)?.GetComponent<PlayerNetworkData>();
+                if (data != null && data != this && data.TeamIndex == equipoAnterior)
+                    miembrosViejos.Add(data);
+            }
+            // Ordenar y reasignar 0, 1, 2... sin huecos
+            miembrosViejos.Sort((a, b) => a.SeatIndex.CompareTo(b.SeatIndex));
+            for (int i = 0; i < miembrosViejos.Count; i++)
+                miembrosViejos[i].SeatIndex = i;
+        }
+
+        // ── Asignar seat en el nuevo equipo ──────────────────────────────────
+        int ocupados = 0;
         foreach (var player in Runner.ActivePlayers)
         {
             var data = Runner.GetPlayerObject(player)?.GetComponent<PlayerNetworkData>();
-            // BUG FIX: excluir jugadores sin equipo asignado (TeamIndex == 0)
-            // y al propio jugador para no contar su asiento anterior
-            if (data != null && data != this && data.TeamIndex == team && data.SeatIndex >= 0)
-                takenSeats = Mathf.Max(takenSeats, data.SeatIndex + 1);
+            if (data != null && data != this && data.TeamIndex == team)
+                ocupados++;
         }
-
-        SeatIndex = takenSeats;
-        IsReady = false; // BUG FIX: resetear ready al cambiar de equipo
+        SeatIndex = ocupados;
     }
 
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]

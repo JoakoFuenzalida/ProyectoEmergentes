@@ -73,9 +73,11 @@ public class TurnManager : NetworkBehaviour
             var gsm = GameStateManager.Instance;
             if (gsm == null) return;
 
+            // Mostrar X y reproducir sonido de fallo en todos los clientes
+            gsm.RPC_ShowTemporaryStrike();
+
             if (gsm.CurrentState == GameStateManager.GameState.TypingAnswer)
             {
-                // Tiempo del buzzer agotado → turno al rival (sin X para el equipo)
                 Debug.Log("[TurnManager] Tiempo buzzer agotado → turno al rival.");
                 gsm.TimeoutBuzzer();
             }

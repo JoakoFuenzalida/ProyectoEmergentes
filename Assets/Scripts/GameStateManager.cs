@@ -66,7 +66,12 @@ public class GameStateManager : NetworkBehaviour
     [Networked] public NetworkString<_32> NombreEquipoB { get; set; }
 
     [Networked] public int RevealedAnswersMask { get; set; }
-    [Networked] public NetworkBool FaceOffChanceUsed { get; set; }
+    [Networked] public NetworkBool FaceOffChanceUsed   { get; set; }
+    // Datos del primer jugador del face-off (-1 = falló / sin respuesta)
+    [Networked] private int FaceOffP1Index     { get; set; }
+    [Networked] private int FaceOffP1Points    { get; set; }
+    [Networked] private int FaceOffP1TeamIndex { get; set; } // 1=A 2=B
+    [Networked] private int FaceOffP1SeatIndex { get; set; } // para saltar su turno al jugar
 
     [Networked] public NetworkBool IsEvaluating { get; set; }
     [Networked] public TickTimer EvaluationTimer { get; set; }
@@ -376,11 +381,36 @@ public class GameStateManager : NetworkBehaviour
     {
         CurrentQuestionIndex = (CurrentQuestionIndex + 1) % (BancoActivo != null && BancoActivo.Length > 0 ? BancoActivo.Length : 1);
         SincronizarPreguntaActual();
-        CurrentState        = GameState.Countdown;
-        Timer               = TickTimer.CreateFromSeconds(Runner, 5.0f);
+        CurrentState = GameState.Countdown;
+        Timer        = TickTimer.CreateFromSeconds(Runner, 5.0f);
+        ResetearFaceOff();
+    }
+
+    private void ResetearFaceOff()
+    {
         BuzzerWinnerId      = -1;
         RevealedAnswersMask = 0;
         FaceOffChanceUsed   = false;
+        FaceOffP1Index      = -1;
+        FaceOffP1Points     = -1;
+        FaceOffP1TeamIndex  = 0;
+        FaceOffP1SeatIndex  = 0;
+    }
+
+    /// <summary>
+    /// Cambia la pregunta sin contar ronda — ocurre cuando ambos jugadores
+    /// del podio fallan. No modifica CurrentRound ni los puntajes.
+    /// </summary>
+    private void CambiarPreguntaSinRonda()
+    {
+        CurrentQuestionIndex = (CurrentQuestionIndex + 1) % (BancoActivo != null && BancoActivo.Length > 0 ? BancoActivo.Length : 1);
+        SincronizarPreguntaActual();
+        RoundScore   = 0;
+        ErrorCount   = 0;
+        CurrentState = GameState.Countdown;
+        Timer        = TickTimer.CreateFromSeconds(Runner, 5.0f);
+        ResetearFaceOff();
+        ActualizarMensajeAnimador("¡Ambos fallaron!\n¡Nueva pregunta!");
     }
 
     public void StartGame()
@@ -390,10 +420,13 @@ public class GameStateManager : NetworkBehaviour
         IsGameStarted = true;
         ErrorCount = 0; RoundScore = 0; ScoreA = 0; ScoreB = 0; CurrentRound = 1;
         CurrentQuestionIndex = 0;
-        BuzzerWinnerId = -1;
+        BuzzerWinnerId      = -1;
         RevealedAnswersMask = 0;
-        FaceOffChanceUsed = false;
-        IsEvaluating = false;
+        FaceOffChanceUsed   = false;
+        FaceOffP1Index      = -1;
+        FaceOffP1Points     = -1;
+        FaceOffP1TeamIndex  = 0;
+        IsEvaluating        = false;
 
         // Escribir pregunta actual en [Networked] — llega a todos en el mismo snapshot
         SincronizarPreguntaActual();
@@ -482,8 +515,9 @@ public class GameStateManager : NetworkBehaviour
     }
 
     /// <summary>
-    /// Llamado por TurnManager cuando el timer del buzzer expira.
-    /// No suma X al equipo — solo pasa el turno al rival del podio.
+    /// Llamado por TurnManager cuando el timer del buzzer expira sin respuesta.
+    /// Sigue la misma lógica del face-off que una respuesta incorrecta:
+    /// ambos fallan → nueva pregunta; P1 tenía respuesta → P1 gana.
     /// </summary>
     public void TimeoutBuzzer()
     {
@@ -494,31 +528,44 @@ public class GameStateManager : NetworkBehaviour
 
         if (!FaceOffChanceUsed)
         {
-            // Primera vez: dar oportunidad al rival
+            // ── P1 se quedó sin tiempo → equivale a fallar ─────────────
             FaceOffChanceUsed = true;
-            int otroJugadorId = -1;
-            foreach (var pRef in Runner.ActivePlayers)
-                if (pRef.PlayerId != playerId) { otroJugadorId = pRef.PlayerId; break; }
+            FaceOffP1Index    = -1;  // P1 no dio respuesta válida
+            FaceOffP1Points   = -1;
 
-            if (otroJugadorId != -1)
-            {
-                BuzzerWinnerId = otroJugadorId;
-                TurnManager.Instance?.IniciarTimerBuzzer(); // el rival también tiene 10 s
-            }
-            else
-            {
-                // Sin rival → ir directo a Playing
-                CurrentState = GameState.Playing;
-                TurnManager.Instance?.ResetTurnIndices();
-                TurnManager.Instance?.AdvanceTurnInTeam(ActiveTeam.ToString());
-            }
+            // Guardar seat de P1 por si hace falta luego
+            foreach (var pRef in Runner.ActivePlayers)
+                if (pRef.PlayerId == playerId)
+                {
+                    var d = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>();
+                    FaceOffP1SeatIndex = d?.SeatIndex ?? 0;
+                    break;
+                }
+
+            int otroId = -1;
+            foreach (var pRef in Runner.ActivePlayers)
+                if (pRef.PlayerId != playerId) { otroId = pRef.PlayerId; break; }
+
+            if (otroId != -1) { BuzzerWinnerId = otroId; TurnManager.Instance?.IniciarTimerBuzzer(); }
+            else CambiarPreguntaSinRonda();
         }
         else
         {
-            // Ambos agotaron su tiempo → ir a Playing sin X
-            CurrentState = GameState.Playing;
-            TurnManager.Instance?.ResetTurnIndices();
-            TurnManager.Instance?.AdvanceTurnInTeam(ActiveTeam.ToString());
+            // ── P2 se quedó sin tiempo ──────────────────────────────────
+            if (FaceOffP1Index >= 0)
+            {
+                // P1 tenía respuesta correcta → P1 gana, su equipo juega sin él al inicio
+                ActiveTeam   = FaceOffP1TeamIndex == 2 ? "B" : "A";
+                CurrentState = GameState.Playing;
+                IniciarTurnoSaltandoPodio(ActiveTeam.ToString(), FaceOffP1TeamIndex, FaceOffP1SeatIndex);
+                string eqP1 = ActiveTeam.ToString() == "A" ? NombreEquipoA.ToString() : NombreEquipoB.ToString();
+                ActualizarMensajeAnimador($"¡{eqP1} gana el face-off\ncon {FaceOffP1Points} pts!");
+            }
+            else
+            {
+                // Ambos fallaron (uno wrong, uno timeout o ambos timeout) → nueva pregunta
+                CambiarPreguntaSinRonda();
+            }
         }
     }
 
@@ -600,6 +647,27 @@ public class GameStateManager : NetworkBehaviour
         ApplyAnswerResult(PendingIsCorrect, PendingAnswerIndex, PendingPlayerId);
     }
 
+    /// <summary>
+    /// Inicia el turno del equipo ganador del face-off saltando al jugador que estuvo en el podio.
+    /// Si el equipo tiene un solo jugador, ese mismo jugador responde (no hay alternativa).
+    /// </summary>
+    private void IniciarTurnoSaltandoPodio(string equipo, int teamIndex, int seatPodio)
+    {
+        int cant = 0;
+        foreach (var pRef in Runner.ActivePlayers)
+        {
+            var d = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>();
+            if (d != null && d.TeamIndex == teamIndex) cant++;
+        }
+
+        if (cant > 1)
+            TurnManager.Instance?.SetTurnIndex(equipo, seatPodio + 1);
+        else
+            TurnManager.Instance?.ResetTurnIndices();
+
+        TurnManager.Instance?.AdvanceTurnInTeam(equipo);
+    }
+
     /// <summary>Incrementa el contador de aciertos del jugador con el PlayerId dado.</summary>
     private void IncrementarAciertos(int playerId)
     {
@@ -642,69 +710,142 @@ public class GameStateManager : NetworkBehaviour
         _answerResultVersion++;
 
         // ==========================================
-        // 1. FASE DE PODIO (Validamos con BuzzerWinnerId)
+        // 1. FASE DE PODIO — Face-Off Family Feud
         // ==========================================
         if (CurrentState == GameState.TypingAnswer && BuzzerWinnerId == playerId)
         {
-            if (isCorrect)
+            PlayerNetworkData pData = null;
+            foreach (var pRef in Runner.ActivePlayers)
+                if (pRef.PlayerId == playerId) { pData = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>(); break; }
+
+            if (!FaceOffChanceUsed)
             {
-                RevealedAnswersMask |= (1 << answerIndex);
-                RegisterCorrectAnswer(PuntosRespuestas[answerIndex]);
-                IncrementarAciertos(playerId);
-
-                PlayerNetworkData pData = null;
-                foreach (var pRef in Runner.ActivePlayers)
+                // ── P1 respondiendo ───────────────────────────────────────
+                if (isCorrect)
                 {
-                    if (pRef.PlayerId == playerId)
-                    {
-                        pData = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>();
-                        break;
-                    }
-                }
-                ActiveTeam = (pData != null && pData.TeamIndex == 2) ? "B" : "A";
-                CurrentState = GameState.Playing;
+                    RevealedAnswersMask |= (1 << answerIndex);
+                    IncrementarAciertos(playerId);
 
-                if (TurnManager.Instance != null)
-                {
-                    int buzzerSeat = (pData != null) ? pData.SeatIndex : 0;
-                    TurnManager.Instance.SetTurnIndex(ActiveTeam.ToString(), buzzerSeat + 1);
-                    TurnManager.Instance.AdvanceTurnInTeam(ActiveTeam.ToString());
-                }
-            }
-            else 
-            {
-                RPC_ShowTemporaryStrike(); 
-                if (!FaceOffChanceUsed)
-                {
-                    FaceOffChanceUsed = true;
-                    int otroJugadorId = -1;
-                    foreach (var pRef in Runner.ActivePlayers)
-                    {
-                        if (pRef.PlayerId != playerId) { otroJugadorId = pRef.PlayerId; break; }
-                    }
+                    // ¿Es la respuesta con más puntos?
+                    bool esLaMejor = true;
+                    foreach (int p in PuntosRespuestas)
+                        if (p > rPts) { esLaMejor = false; break; }
 
-                    if (otroJugadorId != -1)
+                    if (esLaMejor)
                     {
-                        BuzzerWinnerId = otroJugadorId;
-                        TurnManager.Instance?.IniciarTimerBuzzer(); // rival también tiene 10 s
-                    }
-                    else
-                    {
+                        // Gana el face-off directo
+                        RoundScore  += rPts;
+                        ActiveTeam   = (pData != null && pData.TeamIndex == 2) ? "B" : "A";
                         CurrentState = GameState.Playing;
                         if (TurnManager.Instance != null)
                         {
-                            TurnManager.Instance.ResetTurnIndices();
+                            TurnManager.Instance.SetTurnIndex(ActiveTeam.ToString(), (pData?.SeatIndex ?? 0) + 1);
                             TurnManager.Instance.AdvanceTurnInTeam(ActiveTeam.ToString());
                         }
                     }
-                } 
+                    else
+                    {
+                        // No es la #1 → P2 tiene oportunidad de superarla
+                        FaceOffChanceUsed  = true;
+                        FaceOffP1Index     = answerIndex;
+                        FaceOffP1Points    = rPts;
+                        FaceOffP1TeamIndex = pData?.TeamIndex ?? 1;
+                        FaceOffP1SeatIndex = pData?.SeatIndex ?? 0;
+                        RoundScore        += rPts;
+
+                        string p1Name = pData?.PlayerName.ToString() ?? "Jugador";
+                        int otroId = -1; string p2Name = "el rival";
+                        foreach (var pRef in Runner.ActivePlayers)
+                            if (pRef.PlayerId != playerId)
+                            {
+                                otroId = pRef.PlayerId;
+                                p2Name = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>()?.PlayerName.ToString() ?? "el rival";
+                                break;
+                            }
+
+                        if (otroId != -1)
+                        {
+                            BuzzerWinnerId = otroId;
+                            TurnManager.Instance?.IniciarTimerBuzzer();
+                            ActualizarMensajeAnimador($"¡{p1Name}: {rPts} pts!\n¿Puede {p2Name}\nsuperar eso?");
+                        }
+                        else
+                        {
+                            ActiveTeam   = FaceOffP1TeamIndex == 2 ? "B" : "A";
+                            CurrentState = GameState.Playing;
+                            TurnManager.Instance?.ResetTurnIndices();
+                            TurnManager.Instance?.AdvanceTurnInTeam(ActiveTeam.ToString());
+                        }
+                    }
+                }
                 else
                 {
-                    CurrentState = GameState.Playing;
-                    if (TurnManager.Instance != null)
+                    // P1 falló → P2 tiene oportunidad
+                    RPC_ShowTemporaryStrike();
+                    FaceOffChanceUsed  = true;
+                    FaceOffP1Index     = -1;
+                    FaceOffP1Points    = -1;
+                    FaceOffP1SeatIndex = pData?.SeatIndex ?? 0;
+
+                    int otroId = -1;
+                    foreach (var pRef in Runner.ActivePlayers)
+                        if (pRef.PlayerId != playerId) { otroId = pRef.PlayerId; break; }
+
+                    if (otroId != -1) { BuzzerWinnerId = otroId; TurnManager.Instance?.IniciarTimerBuzzer(); }
+                    else CambiarPreguntaSinRonda();
+                }
+            }
+            else
+            {
+                // ── P2 respondiendo ───────────────────────────────────────
+                if (isCorrect)
+                {
+                    RevealedAnswersMask |= (1 << answerIndex);
+                    IncrementarAciertos(playerId);
+                    RoundScore += rPts;
+
+                    bool p2Gana = (FaceOffP1Index == -1) || (rPts > FaceOffP1Points);
+
+                    if (p2Gana)
                     {
-                        TurnManager.Instance.ResetTurnIndices();
-                        TurnManager.Instance.AdvanceTurnInTeam(ActiveTeam.ToString());
+                        ActiveTeam   = (pData != null && pData.TeamIndex == 2) ? "B" : "A";
+                        CurrentState = GameState.Playing;
+                        if (TurnManager.Instance != null)
+                        {
+                            TurnManager.Instance.SetTurnIndex(ActiveTeam.ToString(), (pData?.SeatIndex ?? 0) + 1);
+                            TurnManager.Instance.AdvanceTurnInTeam(ActiveTeam.ToString());
+                        }
+                        string eqP2 = ActiveTeam.ToString() == "A" ? NombreEquipoA.ToString() : NombreEquipoB.ToString();
+                        ActualizarMensajeAnimador($"¡Respuesta más alta!\n¡{eqP2} gana el face-off!");
+                    }
+                    else
+                    {
+                        // P1 tenía más puntos → equipo de P1 juega (sin P1 en primer turno)
+                        ActiveTeam   = FaceOffP1TeamIndex == 2 ? "B" : "A";
+                        CurrentState = GameState.Playing;
+                        IniciarTurnoSaltandoPodio(ActiveTeam.ToString(), FaceOffP1TeamIndex, FaceOffP1SeatIndex);
+                        string eqP1 = ActiveTeam.ToString() == "A" ? NombreEquipoA.ToString() : NombreEquipoB.ToString();
+                        ActualizarMensajeAnimador($"¡{eqP1} gana el face-off\ncon {FaceOffP1Points} pts!");
+                    }
+                }
+                else
+                {
+                    // P2 también falló
+                    RPC_ShowTemporaryStrike();
+
+                    if (FaceOffP1Index >= 0)
+                    {
+                        // P1 tenía respuesta → equipo P1 gana por defecto (sin P1 en primer turno)
+                        ActiveTeam   = FaceOffP1TeamIndex == 2 ? "B" : "A";
+                        CurrentState = GameState.Playing;
+                        IniciarTurnoSaltandoPodio(ActiveTeam.ToString(), FaceOffP1TeamIndex, FaceOffP1SeatIndex);
+                        string eqP1 = ActiveTeam.ToString() == "A" ? NombreEquipoA.ToString() : NombreEquipoB.ToString();
+                        ActualizarMensajeAnimador($"¡{eqP1} gana el face-off\ncon {FaceOffP1Points} pts!");
+                    }
+                    else
+                    {
+                        // Ambos fallaron → nueva pregunta sin contar ronda
+                        CambiarPreguntaSinRonda();
                     }
                 }
             }

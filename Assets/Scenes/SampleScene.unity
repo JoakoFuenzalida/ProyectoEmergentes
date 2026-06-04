@@ -13815,7 +13815,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::WrongAnswerAudio
   buzzerClip: {fileID: 8300000, guid: 0747c77ec5be6aa4292bfb1eace4846c, type: 3}
-  volumen: 0.233
+  volumen: 0.188
 --- !u!4 &1185123244
 Transform:
   m_ObjectHideFlags: 0
@@ -15557,6 +15557,7 @@ MonoBehaviour:
   textoEstadoGeneracion: {fileID: 1755677684}
   audioSourceUI: {fileID: 1375737371}
   dingCorrectClip: {fileID: 8300000, guid: 1cda9d9530e6d124d94448bce09e96a8, type: 3}
+  wrongAnswerClip: {fileID: 8300000, guid: 0747c77ec5be6aa4292bfb1eace4846c, type: 3}
   panelStartScreen: {fileID: 1880993601}
   textoPresionaTecla: {fileID: 210358387}
   musicaInicioSource: {fileID: 2023733429}
@@ -15567,7 +15568,7 @@ MonoBehaviour:
   musicaLobbyFadeSegundos: 1.2
   musicaJuegoSource: {fileID: 607663864}
   musicaJuegoClip: {fileID: 8300000, guid: aa36a5265059a8c419d70d152c88ca0a, type: 3}
-  musicaJuegoVolumen: 0.141
+  musicaJuegoVolumen: 0.12
   musicaSuspensoSource: {fileID: 544474213}
   musicaSuspensoClip: {fileID: 8300000, guid: 2194a3359ccc43742883a814cd4601fe, type: 3}
   musicaSuspensoVolumen: 0.13
