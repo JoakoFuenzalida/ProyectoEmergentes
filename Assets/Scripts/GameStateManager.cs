@@ -73,6 +73,9 @@ public class GameStateManager : NetworkBehaviour
     [Networked] private int FaceOffP1TeamIndex { get; set; } // 1=A 2=B
     [Networked] private int FaceOffP1SeatIndex { get; set; } // para saltar su turno al jugar
 
+    // Pausa el timer del turno mientras el animador anuncia "Turno de..." / "Tiene la palabra"
+    [Networked] public NetworkBool IsAnnouncingTurn { get; set; }
+
     [Networked] public NetworkBool IsEvaluating { get; set; }
     [Networked] public TickTimer EvaluationTimer { get; set; }
     [Networked] public NetworkBool PendingIsCorrect { get; set; }
@@ -353,6 +356,26 @@ public class GameStateManager : NetworkBehaviour
     }
 
     /// <summary>
+    /// Llamado por AnimadorController al iniciar un anuncio de turno.
+    /// Pausa el timer del turno mientras el animador habla.
+    /// </summary>
+    public void IniciarAnuncioTurno()
+    {
+        if (!Object.HasStateAuthority) return;
+        IsAnnouncingTurn = true;
+    }
+
+    /// <summary>
+    /// Llamado por AnimadorController al terminar un anuncio de turno.
+    /// Reanuda el timer del turno.
+    /// </summary>
+    public void TerminarAnuncioTurno()
+    {
+        if (!Object.HasStateAuthority) return;
+        IsAnnouncingTurn = false;
+    }
+
+    /// <summary>
     /// Llamado por AnimadorController (solo host) cuando termina la secuencia de intro.
     /// Avanza el estado a Countdown sin depender de un timer fijo.
     /// </summary>
@@ -395,6 +418,7 @@ public class GameStateManager : NetworkBehaviour
         FaceOffP1Points     = -1;
         FaceOffP1TeamIndex  = 0;
         FaceOffP1SeatIndex  = 0;
+        IsAnnouncingTurn    = false; // safety: limpia bandera entre rondas/cambios de pregunta
     }
 
     /// <summary>
@@ -427,6 +451,7 @@ public class GameStateManager : NetworkBehaviour
         FaceOffP1Points     = -1;
         FaceOffP1TeamIndex  = 0;
         IsEvaluating        = false;
+        IsAnnouncingTurn    = false;
 
         // Escribir pregunta actual en [Networked] — llega a todos en el mismo snapshot
         SincronizarPreguntaActual();
@@ -484,6 +509,8 @@ public class GameStateManager : NetworkBehaviour
 
     private void AwardPointsToTeam(string team, int points)
     {
+        IsAnnouncingTurn = false; // safety: terminó la fase de juego, no debe quedar pausado
+
         if (team == TeamAssigner.TEAM_A) ScoreA += points;
         else ScoreB += points;
 
@@ -542,9 +569,10 @@ public class GameStateManager : NetworkBehaviour
                     break;
                 }
 
-            int otroId = -1;
+            PlayerNetworkData p1Data = null;
             foreach (var pRef in Runner.ActivePlayers)
-                if (pRef.PlayerId != playerId) { otroId = pRef.PlayerId; break; }
+                if (pRef.PlayerId == playerId) { p1Data = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>(); break; }
+            int otroId = GetRivalPodioId(p1Data);
 
             if (otroId != -1) { BuzzerWinnerId = otroId; TurnManager.Instance?.IniciarTimerBuzzer(); }
             else CambiarPreguntaSinRonda();
@@ -668,6 +696,24 @@ public class GameStateManager : NetworkBehaviour
         TurnManager.Instance?.AdvanceTurnInTeam(equipo);
     }
 
+    /// <summary>
+    /// Devuelve el PlayerId del líder (SeatIndex 0) del equipo contrario al de playerData.
+    /// Devuelve -1 si no se encuentra (ej: partida 1v1 sin rival).
+    /// </summary>
+    private int GetRivalPodioId(PlayerNetworkData playerData)
+    {
+        if (playerData == null) return -1;
+        int rivalTeam  = playerData.TeamIndex == 1 ? 2 : 1;
+        int seatBuscado = playerData.SeatIndex;
+        foreach (var pRef in Runner.ActivePlayers)
+        {
+            var d = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>();
+            if (d != null && d.TeamIndex == rivalTeam && d.SeatIndex == seatBuscado)
+                return pRef.PlayerId;
+        }
+        return -1;
+    }
+
     /// <summary>Incrementa el contador de aciertos del jugador con el PlayerId dado.</summary>
     private void IncrementarAciertos(int playerId)
     {
@@ -754,14 +800,11 @@ public class GameStateManager : NetworkBehaviour
                         RoundScore        += rPts;
 
                         string p1Name = pData?.PlayerName.ToString() ?? "Jugador";
-                        int otroId = -1; string p2Name = "el rival";
-                        foreach (var pRef in Runner.ActivePlayers)
-                            if (pRef.PlayerId != playerId)
-                            {
-                                otroId = pRef.PlayerId;
-                                p2Name = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>()?.PlayerName.ToString() ?? "el rival";
-                                break;
-                            }
+                        int otroId = GetRivalPodioId(pData);
+                        string p2Name = "el rival";
+                        if (otroId != -1)
+                            foreach (var pRef in Runner.ActivePlayers)
+                                if (pRef.PlayerId == otroId) { p2Name = Runner.GetPlayerObject(pRef)?.GetComponent<PlayerNetworkData>()?.PlayerName.ToString() ?? "el rival"; break; }
 
                         if (otroId != -1)
                         {
@@ -787,9 +830,7 @@ public class GameStateManager : NetworkBehaviour
                     FaceOffP1Points    = -1;
                     FaceOffP1SeatIndex = pData?.SeatIndex ?? 0;
 
-                    int otroId = -1;
-                    foreach (var pRef in Runner.ActivePlayers)
-                        if (pRef.PlayerId != playerId) { otroId = pRef.PlayerId; break; }
+                    int otroId = GetRivalPodioId(pData);
 
                     if (otroId != -1) { BuzzerWinnerId = otroId; TurnManager.Instance?.IniciarTimerBuzzer(); }
                     else CambiarPreguntaSinRonda();

@@ -21,7 +21,9 @@ public class TurnManager : NetworkBehaviour
         { TeamAssigner.TEAM_B, 0 }
     };
 
-    private bool _timerRunning = false;
+    private bool  _timerRunning        = false;
+    private bool  _waitingForAnnouncer = false;
+    private float _announcerTimeout    = 0f;
     private ChangeDetector _changes;
 
     public bool IsLocalPlayersTurn =>
@@ -59,10 +61,28 @@ public class TurnManager : NetworkBehaviour
 
     public override void FixedUpdateNetwork()
     {
-        if (!Object.HasStateAuthority || !_timerRunning) return;
+        if (!Object.HasStateAuthority) return;
+
+        // Esperar a que el animador termine de anunciar el turno
+        if (_waitingForAnnouncer)
+        {
+            _announcerTimeout -= Runner.DeltaTime;
+            if (_announcerTimeout <= 0f)
+            {
+                _waitingForAnnouncer = false;
+                _timerRunning        = true;
+                Debug.LogWarning("[TurnManager] Timeout de seguridad: arrancando timer sin esperar al animador.");
+            }
+            return;
+        }
+
+        if (!_timerRunning) return;
 
         // Pausar mientras el animador evalúa (evita X falsas durante el suspenso)
         if (GameStateManager.Instance != null && GameStateManager.Instance.IsEvaluating) return;
+
+        // Pausar mientras el animador anuncia el turno ("Turno de X" / "tiene la palabra")
+        if (GameStateManager.Instance != null && GameStateManager.Instance.IsAnnouncingTurn) return;
 
         TurnTimeLeft -= Runner.DeltaTime;
         if (TurnTimeLeft <= 0f)
@@ -154,10 +174,24 @@ public class TurnManager : NetworkBehaviour
             _teamTurnIndex[safeTeamKey] = (idx + 1) % teamPlayers.Count;
         }
 
-        ActivePlayer = nextPlayer;
-        TurnTimeLeft = TurnDurationSeconds;
-        _timerRunning = true;
+        ActivePlayer         = nextPlayer;
+        TurnTimeLeft         = TurnDurationSeconds > 0 ? TurnDurationSeconds : turnDurationDefault;
+        _timerRunning        = false;
+        _waitingForAnnouncer = true;
+        _announcerTimeout    = 15f; // seguridad: arranca solo si el TTS tarda más de 15s
     }
+    // Llamado por AnimadorController (host) cuando el TTS del anuncio de turno termina.
+    public bool WaitingForAnnouncer => _waitingForAnnouncer;
+
+    public void StartTurnTimer()
+    {
+        if (!Object.HasStateAuthority) return;
+        _waitingForAnnouncer = false;
+        _announcerTimeout    = 0f;
+        _timerRunning        = true;
+        Debug.Log("[TurnManager] Animador terminó → arranca timer de turno.");
+    }
+
     /// <summary>
     /// Inicia el timer corto del podio (10 s por defecto).
     /// Solo corre en el host; TurnTimeLeft se replica a clientes.
@@ -165,15 +199,18 @@ public class TurnManager : NetworkBehaviour
     public void IniciarTimerBuzzer()
     {
         if (!Object.HasStateAuthority) return;
-        ActivePlayer  = PlayerRef.None; // el turno en el podio lo controla BuzzerWinnerId
-        TurnTimeLeft  = buzzerDurationSeconds;
-        _timerRunning = true;
+        ActivePlayer         = PlayerRef.None; // el turno en el podio lo controla BuzzerWinnerId
+        TurnTimeLeft         = buzzerDurationSeconds;
+        _waitingForAnnouncer = false; // buzzer arranca inmediatamente, sin esperar animador
+        _timerRunning        = true;
     }
 
     public void ResetTurnIndices()
     {
         _teamTurnIndex[TeamAssigner.TEAM_A] = 0;
         _teamTurnIndex[TeamAssigner.TEAM_B] = 0;
+        _waitingForAnnouncer = false;
+        _announcerTimeout    = 0f;
     }
 
     public void SetTurnIndex(string team, int index)
@@ -190,8 +227,9 @@ public class TurnManager : NetworkBehaviour
 
         if (newState == GameStateManager.GameState.RoundEnd || newState == GameStateManager.GameState.GameOver)
         {
-            _timerRunning = false;
-            TurnTimeLeft  = 0f;
+            _timerRunning        = false;
+            _waitingForAnnouncer = false;
+            TurnTimeLeft         = 0f;
         }
     }
 

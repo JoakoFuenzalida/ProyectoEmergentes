@@ -9,7 +9,16 @@ public class AnimadorIA : MonoBehaviour
     public static event Action<string> OnMensajeChanged;
     public static event Action<bool>   OnGenerandoPreguntas;
 
-    private bool _generandoComentario = false;
+    // True SOLO durante la invocación de NotifyMensaje(_pendingTurnMessage) en Update().
+    // AnimadorController lo lee para saber si debe arrancar el timer cuando termine el TTS.
+    public static bool PendingTimerStart { get; private set; } = false;
+
+    private bool      _generandoComentario    = false;
+    private bool      _teamAnnouncedThisRound = false;
+    private string    _pendingTurnMessage     = null;
+
+    // Polling: último ActivePlayer que ya procesamos — evita disparar dos veces el mismo turno.
+    private PlayerRef _lastKnownActivePlayer  = PlayerRef.None;
 
     private void Awake()
     {
@@ -17,26 +26,133 @@ public class AnimadorIA : MonoBehaviour
         Instance = this;
     }
 
+    // Update() corre DESPUÉS de todos los Render() de Fusion en el mismo frame,
+    // por eso tanto el polling como el dispatch del mensaje van aquí.
+    private void Update()
+    {
+        // ── Polling de ActivePlayer ───────────────────────────────────
+        // El evento TurnManager.OnTurnChangedEvent a veces no llega a este MonoBehaviour
+        // (comportamiento conocido de Fusion en ciertas versiones). El polling es el fallback
+        // definitivo: lee el valor networked directamente, igual que UIGameController.
+        if (TurnManager.Instance != null &&
+            GameStateManager.Instance != null &&
+            GameStateManager.Instance.IsGameStarted)
+        {
+            PlayerRef current = TurnManager.Instance.ActivePlayer;
+            if (current != _lastKnownActivePlayer)
+            {
+                _lastKnownActivePlayer = current;
+                if (current != PlayerRef.None)
+                    BuildPendingTurnMessage(current);
+            }
+        }
+
+        // ── Dispatch del mensaje de turno ─────────────────────────────
+        if (_pendingTurnMessage != null)
+        {
+            var gsm = GameStateManager.Instance;
+            if (gsm == null ||
+                (gsm.CurrentState != GameStateManager.GameState.Playing &&
+                 gsm.CurrentState != GameStateManager.GameState.Stealing))
+            {
+                _pendingTurnMessage = null;
+                return;
+            }
+
+            if (AnimadorController.Instance != null && AnimadorController.Instance.MensajeEnCurso)
+                return;
+
+            PendingTimerStart = true;
+            NotifyMensaje(_pendingTurnMessage);
+            PendingTimerStart = false;
+            _pendingTurnMessage = null;
+        }
+    }
+
     private void OnEnable()
     {
         GameStateManager.OnStateChangedEvent            += HandleStateChanged;
+        GameStateManager.OnStateChangedEvent            += ResetRoundFlags;
         GameStateManager.OnAnswerResultEvent            += HandleAnswerResult;
         GameStateManager.OnEvaluationStateChangedEvent  += HandleEvaluationChanged;
-        TurnManager.OnTurnChangedEvent                  += HandleTurnChanged;
+        // Suscripción al evento como mecanismo secundario (el polling es el primario).
+        TurnManager.OnTurnChangedEvent                  += HandleTurnChangedEvent;
     }
 
     private void OnDisable()
     {
         GameStateManager.OnStateChangedEvent            -= HandleStateChanged;
+        GameStateManager.OnStateChangedEvent            -= ResetRoundFlags;
         GameStateManager.OnAnswerResultEvent            -= HandleAnswerResult;
         GameStateManager.OnEvaluationStateChangedEvent  -= HandleEvaluationChanged;
-        TurnManager.OnTurnChangedEvent                  -= HandleTurnChanged;
+        TurnManager.OnTurnChangedEvent                  -= HandleTurnChangedEvent;
     }
 
     // ─── API pública ─────────────────────────────────────────────────
 
     public static void NotifyMensaje(string mensaje)    => OnMensajeChanged?.Invoke(mensaje);
     public static void NotifyGenerating(bool generando) => OnGenerandoPreguntas?.Invoke(generando);
+
+    // ─── Reset por ronda ─────────────────────────────────────────────
+
+    private void ResetRoundFlags(GameStateManager.GameState state)
+    {
+        if (state == GameStateManager.GameState.Countdown)
+        {
+            _teamAnnouncedThisRound = false;
+            _lastKnownActivePlayer  = PlayerRef.None; // permite re-anunciar el primer turno de cada ronda
+        }
+    }
+
+    // ─── Evento secundario de TurnManager ────────────────────────────
+    // Si el evento llega, actualiza el tracker para que el polling no duplique el disparo.
+
+    private void HandleTurnChangedEvent(PlayerRef player)
+    {
+        if (player == PlayerRef.None) return;
+        if (GameStateManager.Instance == null || !GameStateManager.Instance.IsGameStarted) return;
+
+        // Sincronizar el tracker: si el evento llega primero, el polling lo saltará.
+        if (player == _lastKnownActivePlayer) return; // ya procesado por el polling
+        _lastKnownActivePlayer = player;
+        BuildPendingTurnMessage(player);
+    }
+
+    // ─── Lógica de mensaje de turno ──────────────────────────────────
+
+    private void BuildPendingTurnMessage(PlayerRef player)
+    {
+        if (GameStateManager.Instance == null) return;
+
+        var data = GameStateManager.Instance.Runner
+            ?.GetPlayerObject(player)?.GetComponent<PlayerNetworkData>();
+        if (data == null) return;
+
+        string playerName = data.PlayerName.ToString();
+        string teamName   = data.TeamIndex == 1
+            ? GameStateManager.Instance.NombreEquipoA.ToString()
+            : GameStateManager.Instance.NombreEquipoB.ToString();
+
+        if (!_teamAnnouncedThisRound)
+        {
+            _teamAnnouncedThisRound = true;
+            string pregunta = GameStateManager.Instance.PreguntaActual ?? "";
+            string preguntaLinea = !string.IsNullOrEmpty(pregunta) ? $"\n{pregunta}" : "";
+            _pendingTurnMessage = $"¡{teamName} tiene la palabra!\nTurno de {playerName}!{preguntaLinea}";
+        }
+        else
+        {
+            string[] frases = {
+                $"Turno de {playerName}!\n¿Cuál es tu respuesta?",
+                $"{playerName}, es tu momento!\n¡Dame una respuesta!",
+                $"¡Vamos {playerName}!\n¿Qué dice {teamName}?"
+            };
+            int idx = (int)((uint)player.PlayerId % (uint)frases.Length);
+            _pendingTurnMessage = frases[idx];
+        }
+
+        Debug.Log($"[AnimadorIA] Turno detectado → '{_pendingTurnMessage.Substring(0, Mathf.Min(60, _pendingTurnMessage.Length))}'");
+    }
 
     // ─── Estado del juego (solo host, vía LLM) ───────────────────────
 
@@ -94,17 +210,14 @@ public class AnimadorIA : MonoBehaviour
     }
 
     // ─── Suspense durante la evaluación (solo host) ──────────────────
-    // Se dispara cuando IsEvaluating cambia a true, es decir justo cuando
-    // el jugador envía su respuesta y el juego espera 3.5s antes de revelarla.
 
     private void HandleEvaluationChanged(bool isEvaluating)
     {
-        if (!isEvaluating) return;   // solo reaccionar al INICIO de la evaluación
+        if (!isEvaluating) return;
         if (GameStateManager.Instance == null || !GameStateManager.Instance.Object.HasStateAuthority) return;
         if (!GameStateManager.Instance.IsGameStarted) return;
 
         var gsm = GameStateManager.Instance;
-
         string nombre = gsm.Runner
             ?.GetPlayerObject(PlayerRef.FromIndex(gsm.PendingPlayerId))
             ?.GetComponent<PlayerNetworkData>()?.PlayerName.ToString() ?? "Jugador";
@@ -120,8 +233,6 @@ public class AnimadorIA : MonoBehaviour
         if (GameStateManager.Instance == null || !GameStateManager.Instance.IsGameStarted) return;
         if (!GameStateManager.Instance.Object.HasStateAuthority) return;
 
-        // Forzar reset: si el suspense LLM tardó más de 3.5s, la reacción
-        // siempre debe mostrarse de todas formas.
         _generandoComentario = false;
 
         string contexto = correct
@@ -133,34 +244,6 @@ public class AnimadorIA : MonoBehaviour
         GenerarYMostrar(contexto);
     }
 
-    // ─── Cambio de turno (hardcoded, sin LLM) ────────────────────────
-
-    private void HandleTurnChanged(PlayerRef player)
-    {
-        if (GameStateManager.Instance == null || !GameStateManager.Instance.IsGameStarted) return;
-        var state = GameStateManager.Instance.CurrentState;
-        if (state != GameStateManager.GameState.Playing &&
-            state != GameStateManager.GameState.Stealing) return;
-        if (player == PlayerRef.None) return;
-
-        var data = GameStateManager.Instance.Runner
-            ?.GetPlayerObject(player)?.GetComponent<PlayerNetworkData>();
-        if (data == null) return;
-
-        string playerName = data.PlayerName.ToString();
-        string teamName   = data.TeamIndex == 1
-            ? GameStateManager.Instance.NombreEquipoA.ToString()
-            : GameStateManager.Instance.NombreEquipoB.ToString();
-
-        string[] frases = {
-            $"Turno de {playerName}! Cual es tu respuesta?",
-            $"{playerName}, es tu momento! Dame una respuesta!",
-            $"Vamos {playerName}! Que dice {teamName}?"
-        };
-        int idx = (int)((uint)player.PlayerId % (uint)frases.Length);
-        NotifyMensaje(frases[idx]);
-    }
-
     // ─── LLM helpers ─────────────────────────────────────────────────
 
     private void GenerarBienvenida()
@@ -170,7 +253,7 @@ public class AnimadorIA : MonoBehaviour
 
         var gsm = GameStateManager.Instance;
         string equipoA = gsm != null ? gsm.NombreEquipoA.ToString() : "A";
-        string equipoB = gsm != null ? gsm.NombreEquipoB.ToString() : "B";  // fix: era equipoA
+        string equipoB = gsm != null ? gsm.NombreEquipoB.ToString() : "B";
         string liderA  = gsm != null ? gsm.GetLiderNombre(1) : "Jugador";
         string liderB  = gsm != null ? gsm.GetLiderNombre(2) : "Jugador";
 

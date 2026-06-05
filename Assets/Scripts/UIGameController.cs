@@ -130,6 +130,7 @@ public class UIGameController : MonoBehaviour
     private int  _prevRevealedMask = 0; // detecta nuevas respuestas reveladas para el ding
     private bool isPaused = false;
     private bool _suspensoActivo = false;
+    private bool _prevAnnouncingTurn = false;
     private bool _tableroMostrarPlaceholders = false; // false = slots vacíos, true = muestra "--- X ---"
     private CursorLockMode previousLockMode;
     private bool previousCursorVisible;
@@ -769,9 +770,11 @@ public class UIGameController : MonoBehaviour
         // ── Guardar estado para el Update ──────────────────────
         _esMiTurnoActual = esMiTurno;
 
-        bool estadoPermiteInput = currentState == GameStateManager.GameState.TypingAnswer ||
-                                  currentState == GameStateManager.GameState.Playing ||
-                                  currentState == GameStateManager.GameState.Stealing;
+        bool estadoPermiteInput = (currentState == GameStateManager.GameState.TypingAnswer ||
+                                   currentState == GameStateManager.GameState.Playing ||
+                                   currentState == GameStateManager.GameState.Stealing)
+                                  // No mostrar input mientras el animador anuncia el turno
+                                  && !GameStateManager.Instance.IsAnnouncingTurn;
 
         if (esMiTurno && estadoPermiteInput)
         {
@@ -810,6 +813,18 @@ public class UIGameController : MonoBehaviour
         }
 
         if (Input.GetKeyDown(KeyCode.Escape)) TogglePauseMenu();
+
+        // Detectar cambios en IsAnnouncingTurn para refrescar visibilidad del input
+        var gsmAnuncio = GameStateManager.Instance;
+        if (gsmAnuncio != null && gsmAnuncio.Object != null && gsmAnuncio.Object.IsValid)
+        {
+            bool anunciando = gsmAnuncio.IsAnnouncingTurn;
+            if (anunciando != _prevAnnouncingTurn)
+            {
+                _prevAnnouncingTurn = anunciando;
+                ActualizarControlInput();
+            }
+        }
 
         // Polling de seguridad para el buzzer: reintenta ActualizarControlInput() cada frame
         // hasta _buzzerRetryFrames veces, para cubrir cualquier retraso de sincronización de red.

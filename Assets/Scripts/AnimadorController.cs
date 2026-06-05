@@ -34,9 +34,18 @@ public class AnimadorController : MonoBehaviour
     private Coroutine _viñetaCoroutine;
     private bool      _enPodio         = false;
     private bool      _secuenciaActiva = false; // bloquea mensajes externos durante intro/countdown
+    private bool      _mensajeEnCurso  = false;
+    private int       _mensajeSequence = 0;
 
     // Versión de petición TTS: si llega audio de una petición vieja, se descarta
     private int _ttsRequestId = 0;
+
+    // ── Anuncio de turno ─────────────────────────────────────────────
+    private Coroutine _anuncioTurnoCoroutine;
+    private bool _anuncioInicialPendiente = false; // primer turno tras face-off → "tiene la palabra"
+    private GameStateManager.GameState _estadoAnterior = GameStateManager.GameState.WaitingForPlayers;
+
+    public bool MensajeEnCurso => _secuenciaActiva || _mensajeEnCurso;
 
     private void Awake()
     {
@@ -77,18 +86,23 @@ public class AnimadorController : MonoBehaviour
     {
         GameStateManager.OnStateChangedEvent += HandleEstadoJuego;
         AnimadorIA.OnMensajeChanged           += OnMensajeIA;
+        TurnManager.OnTurnChangedEvent        += HandleTurnoCambio;
     }
 
     private void OnDisable()
     {
         GameStateManager.OnStateChangedEvent -= HandleEstadoJuego;
         AnimadorIA.OnMensajeChanged           -= OnMensajeIA;
+        TurnManager.OnTurnChangedEvent        -= HandleTurnoCambio;
     }
 
     // ─── Teleport y reacciones según estado ──────────────────────────
 
     private void HandleEstadoJuego(GameStateManager.GameState estado)
     {
+        bool entrandoAPlaying = (estado == GameStateManager.GameState.Playing
+                              && _estadoAnterior == GameStateManager.GameState.TypingAnswer);
+
         switch (estado)
         {
             // ── Mesas / Estudio ──────────────────────────────
@@ -114,6 +128,8 @@ public class AnimadorController : MonoBehaviour
                 _enPodio = false;
                 TeleportarA(posEstudio);
                 Ocultar(viñetaPodio);
+                // Si venimos del podio (face-off) → primer turno tendrá "tiene la palabra"
+                if (entrandoAPlaying) _anuncioInicialPendiente = true;
                 break;
 
             case GameStateManager.GameState.RoundEnd:
@@ -152,6 +168,15 @@ public class AnimadorController : MonoBehaviour
                 MostrarBuzzerWinner();
                 break;
         }
+
+        // ── Limpieza del anuncio de turno fuera de Playing ──────────────
+        if (estado != GameStateManager.GameState.Playing)
+        {
+            _anuncioInicialPendiente = false;
+            DetenerAnuncioTurno();
+        }
+
+        _estadoAnterior = estado;
     }
 
     private void TeleportarA(Transform destino)
@@ -360,6 +385,171 @@ public class AnimadorController : MonoBehaviour
             gsm.TerminarRoundEnd();
     }
 
+    // ─── Anuncio de turno (Playing) ──────────────────────────────────
+
+    private void HandleTurnoCambio(PlayerRef nuevoActivo)
+    {
+        var gsm = GameStateManager.Instance;
+        if (gsm == null) return;
+        if (gsm.CurrentState != GameStateManager.GameState.Playing) return;
+        if (nuevoActivo == PlayerRef.None) return;
+
+        // Primera vez = primer turno tras ganar el face-off ("X tiene la palabra" + pregunta).
+        // También detectamos vía _estadoAnterior por si el evento de turno llega antes que el de estado.
+        bool primeraVez = _anuncioInicialPendiente
+                       || _estadoAnterior == GameStateManager.GameState.TypingAnswer;
+        _anuncioInicialPendiente = false;
+
+        if (_anuncioTurnoCoroutine != null) StopCoroutine(_anuncioTurnoCoroutine);
+        _anuncioTurnoCoroutine = StartCoroutine(SecuenciaAnuncioTurno(nuevoActivo, primeraVez));
+    }
+
+    private void DetenerAnuncioTurno()
+    {
+        if (_anuncioTurnoCoroutine != null)
+        {
+            StopCoroutine(_anuncioTurnoCoroutine);
+            _anuncioTurnoCoroutine = null;
+        }
+    }
+
+    private IEnumerator SecuenciaAnuncioTurno(PlayerRef jugador, bool primeraVez)
+    {
+        var gsm = GameStateManager.Instance;
+        if (gsm == null) yield break;
+        bool esHost = gsm.Object != null && gsm.Object.HasStateAuthority;
+
+        // Pausar timer del turno inmediatamente (solo host)
+        if (esHost) gsm.IniciarAnuncioTurno();
+
+        // Esperar 1 frame para que OnMensajeIA del resultado ("¡CORRECTO!") fire en este tick
+        // y dispare su ReproducirTTS antes de que bloqueemos.
+        yield return null;
+
+        // ── Bloquear futuros OnMensajeIA AHORA ─────────────────────────────
+        // Esto impide que un comentario LLM (que llega async vía OnAnswerResultEvent)
+        // dispare ReproducirTTS, que haría audioSource.Stop() e incrementaría
+        // _ttsRequestId, cancelando mi "¡Turno de X!" justo cuando lo necesito.
+        _secuenciaActiva = true;
+
+        // ── Esperar a que el audio del resultado anterior hable ───────────
+        // 1) Esperar a que ARRANQUE (max 3s para que TTS responda)
+        // 2) Esperar a que TERMINE
+        if (audioSource != null)
+        {
+            float esperaArranque = 0f;
+            while (!audioSource.isPlaying && esperaArranque < 3f)
+            {
+                esperaArranque += Time.deltaTime;
+                yield return null;
+            }
+            while (audioSource.isPlaying) yield return null;
+        }
+
+        // Confirmar que seguimos en Playing tras el wait
+        if (gsm.CurrentState != GameStateManager.GameState.Playing)
+        {
+            _secuenciaActiva = false;
+            if (esHost) gsm.TerminarAnuncioTurno();
+            _anuncioTurnoCoroutine = null;
+            yield break;
+        }
+
+        // Detener la viñeta del mensaje anterior para que su OcultarTodas() (a los 9s)
+        // no esconda las viñetas mientras yo estoy hablando.
+        if (_viñetaCoroutine != null) { StopCoroutine(_viñetaCoroutine); _viñetaCoroutine = null; }
+        SetHablando(false);
+
+        // Datos del jugador y equipo activos
+        string nombreJugador = "Jugador";
+        var data = gsm.Runner?.GetPlayerObject(jugador)?.GetComponent<PlayerNetworkData>();
+        if (data != null) nombreJugador = data.PlayerName.ToString();
+
+        string nombreEquipo = gsm.ActiveTeam.ToString() == "A"
+            ? gsm.NombreEquipoA.ToString()
+            : gsm.NombreEquipoB.ToString();
+
+        if (primeraVez)
+        {
+            // 1) "X tiene la palabra! Turno de Y!"
+            yield return StartCoroutine(Pagina($"¡{nombreEquipo} tiene la palabra!\n¡Turno de {nombreJugador}!", 3.5f));
+            // 2) Lee la pregunta
+            string pregunta = gsm.PreguntaActual;
+            yield return StartCoroutine(Pagina($"La pregunta es:\n{pregunta}", 4.5f));
+        }
+        else
+        {
+            // Cambio de turno rápido (≈1.5-2s total) — TTS sin buffers extra
+            yield return StartCoroutine(PaginaCorta($"¡Turno de {nombreJugador}!", 1.2f));
+        }
+
+        _secuenciaActiva = false;
+        if (esHost) gsm.TerminarAnuncioTurno();
+        _anuncioTurnoCoroutine = null;
+    }
+
+    /// <summary>
+    /// Versión rápida de Pagina para anuncios cortos (ej. "¡Turno de X!").
+    /// - Espera máximo 4s para que el TTS llegue (vs 8s en Pagina)
+    ///   PowerShell (System.Speech) tarda 1-3s en responder, así que 4s es necesario
+    /// - No tiene buffer post-audio ni pausaEntrePaginas al final
+    /// </summary>
+    private IEnumerator PaginaCorta(string texto, float duracionFallback)
+    {
+        // 1. Solicitar TTS en silencio
+        int       myId  = ++_ttsRequestId;
+        AudioClip clip  = null;
+        bool      llegó = false;
+
+        if (TTSService.Instance != null)
+        {
+            string textoVoz = texto.Replace("\n", " ").Trim();
+            TTSService.Instance.GenerarAudio(textoVoz, c =>
+            {
+                if (myId != _ttsRequestId) return;
+                clip  = c;
+                llegó = true;
+            });
+
+            // Esperar hasta 4s — PowerShell de System.Speech tarda 1-3s en responder
+            float t = 0f;
+            while (!llegó && t < 4f)
+            {
+                t += Time.deltaTime;
+                yield return null;
+            }
+        }
+
+        // 2. Mostrar viñeta + arrancar audio al mismo instante
+        Activar(viñetaEquipoA, textoEquipoA, texto);
+        Activar(viñetaEquipoB, textoEquipoB, texto);
+        Ocultar(viñetaPodio);
+        UIGameController.Instance?.ActualizarTextoAnimador(texto);
+        SetHablando(true);
+
+        if (clip != null && myId == _ttsRequestId)
+        {
+            if (audioSource.clip != null && audioSource.clip.name == "tts_clip")
+            {
+                AudioClip viejo = audioSource.clip;
+                audioSource.clip = null;
+                Destroy(viejo);
+            }
+            audioSource.clip = clip;
+            audioSource.Play();
+            // Dura exactamente lo que habla — sin +0.4s buffer
+            yield return new WaitForSeconds(clip.length);
+        }
+        else
+        {
+            yield return new WaitForSeconds(duracionFallback);
+        }
+
+        // 3. Ocultar — sin pausaEntrePaginas para empezar timer inmediatamente
+        OcultarTodas();
+        SetHablando(false);
+    }
+
     // ─── Secuencia de cierre (Game Over) ─────────────────────────────
 
     private void IniciarSecuenciaGameOver()
@@ -481,16 +671,31 @@ public class AnimadorController : MonoBehaviour
         _viñetaCoroutine = StartCoroutine(CoroutineViñetaNormal(mensaje));
         UIGameController.Instance?.ActualizarTextoAnimador(mensaje);
 
-        // Si el juego está en fase de suspense (IsEvaluating) Y somos el host,
-        // liberar la evaluación cuando el TTS termine — así el reveal ocurre justo
-        // después del "DAMELA!" y no a los 1.5 s del timer fijo.
-        var gsm = GameStateManager.Instance;
-        bool esHostEvaluando = gsm != null &&
-                               gsm.Object != null &&
-                               gsm.Object.HasStateAuthority &&
-                               gsm.IsEvaluating;
+        var gsm    = GameStateManager.Instance;
+        bool esHost = gsm != null && gsm.Object != null && gsm.Object.HasStateAuthority;
 
-        ReproducirTTS(mensaje, esHostEvaluando ? LiberarEvaluacion : (System.Action)null);
+        // Prioridad 1: suspense de evaluación — revelar resultado cuando termina el "DAMELA!"
+        bool esHostEvaluando = esHost && gsm.IsEvaluating;
+        // Prioridad 2: anuncio de turno — arrancar el timer de 30s cuando termina el TTS.
+        // PendingTimerStart es true SOLO cuando el mensaje vino de _pendingTurnMessage (Update),
+        // nunca cuando viene del resultado del face-off u otros mensajes de Render().
+        bool debeArrancarTimer = esHost && AnimadorIA.PendingTimerStart;
+
+        _mensajeEnCurso = true;
+        int mensajeId = ++_mensajeSequence;
+
+        System.Action callback = null;
+        if      (esHostEvaluando)   callback = LiberarEvaluacion;
+        else if (debeArrancarTimer) callback = () => TurnManager.Instance?.StartTurnTimer();
+
+        System.Action wrapped = () =>
+        {
+            if (mensajeId != _mensajeSequence) return;
+            callback?.Invoke();
+            _mensajeEnCurso = false;
+        };
+
+        ReproducirTTS(mensaje, wrapped);
     }
 
     private void LiberarEvaluacion()
