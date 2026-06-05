@@ -26,6 +26,8 @@ public class UIGameController : MonoBehaviour
     [SerializeField] private TMP_InputField inputEdicionEquipoB;
     [SerializeField] private GameObject btnArrancarPartida;
     [SerializeField] private GameObject btnListo;
+    [SerializeField] private GameObject btnEditarEquipoA; // solo visible si soy [C] del equipo A
+    [SerializeField] private GameObject btnEditarEquipoB; // solo visible si soy [C] del equipo B
     [SerializeField] private TMP_Text textoCodigoRoom;
 
     [Header("RoomPanel: Configuración de Partida")]
@@ -362,7 +364,10 @@ public class UIGameController : MonoBehaviour
             }
         }
 
-        string unassigned = ""; string teamA = ""; string teamB = "";
+        // ── Recopilar jugadores por equipo ─────────────────────────────────
+        var sinEquipo = new System.Collections.Generic.List<PlayerNetworkData>();
+        var jugA      = new System.Collections.Generic.List<PlayerNetworkData>();
+        var jugB      = new System.Collections.Generic.List<PlayerNetworkData>();
         bool todosListos = true; int jugadoresConEquipo = 0;
 
         foreach (var playerRef in GameStateManager.Instance.Runner.ActivePlayers)
@@ -370,29 +375,58 @@ public class UIGameController : MonoBehaviour
             var data = GetPlayerData(playerRef);
             if (data == null) continue;
 
-            string status = data.IsReady ? "<color=green>[OK]</color>" : "<color=red>[...]</color>";
-            string nombre = string.IsNullOrWhiteSpace(data.PlayerName.ToString()) ? "Jugador" : data.PlayerName.ToString();
-            string line = $"{nombre} {status}\n";
-
-            if (data.TeamIndex == 0) unassigned += line;
-            else if (data.TeamIndex == 1) { teamA += line; jugadoresConEquipo++; }
-            else if (data.TeamIndex == 2) { teamB += line; jugadoresConEquipo++; }
+            if      (data.TeamIndex == 0) sinEquipo.Add(data);
+            else if (data.TeamIndex == 1) { jugA.Add(data); jugadoresConEquipo++; }
+            else if (data.TeamIndex == 2) { jugB.Add(data); jugadoresConEquipo++; }
 
             if (!data.IsReady || data.TeamIndex == 0) todosListos = false;
         }
 
-        if (textoListaSinEquipo != null) textoListaSinEquipo.text = unassigned;
-        if (textoListaEquipoA != null) textoListaEquipoA.text = teamA;
-        if (textoListaEquipoB != null) textoListaEquipoB.text = teamB;
+        // Ordenar por SeatIndex ascendente (orden de llegada al equipo)
+        jugA.Sort((a, b) => a.SeatIndex.CompareTo(b.SeatIndex));
+        jugB.Sort((a, b) => a.SeatIndex.CompareTo(b.SeatIndex));
 
+        if (textoListaSinEquipo != null) textoListaSinEquipo.text = ConstruirLista(sinEquipo, marcarLider: false);
+        if (textoListaEquipoA   != null) textoListaEquipoA.text   = ConstruirLista(jugA, marcarLider: true);
+        if (textoListaEquipoB   != null) textoListaEquipoB.text   = ConstruirLista(jugB, marcarLider: true);
+
+        // ── Restricción 1: no permitir arrancar si hay jugadores sin equipo ──
+        bool haySinEquipo = sinEquipo.Count > 0;
         if (GameStateManager.Instance.Runner.IsServer && btnArrancarPartida != null)
-            btnArrancarPartida.SetActive(todosListos && jugadoresConEquipo >= 2 && _preguntasListas);
+            btnArrancarPartida.SetActive(todosListos && jugadoresConEquipo >= 2 && !haySinEquipo && _preguntasListas);
+
+        // ── Restricción 2: solo el [C] de cada equipo ve su botón "Editar" ───
+        bool soyLiderA = myData != null && myData.TeamIndex == 1 && myData.SeatIndex == 0;
+        bool soyLiderB = myData != null && myData.TeamIndex == 2 && myData.SeatIndex == 0;
+        if (btnEditarEquipoA != null) btnEditarEquipoA.SetActive(soyLiderA);
+        if (btnEditarEquipoB != null) btnEditarEquipoB.SetActive(soyLiderB);
 
         ActualizarConfigUI();
     }
 
+    /// <summary>
+    /// Construye el texto de una lista del room. Si marcarLider=true, antepone "[C] "
+    /// al jugador con SeatIndex == 0 (el primero en llegar al equipo, el "capitán").
+    /// </summary>
+    private string ConstruirLista(System.Collections.Generic.List<PlayerNetworkData> jugadores, bool marcarLider)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var data in jugadores)
+        {
+            string status  = data.IsReady ? "<color=green>[OK]</color>" : "<color=red>[...]</color>";
+            string nombre  = string.IsNullOrWhiteSpace(data.PlayerName.ToString()) ? "Jugador" : data.PlayerName.ToString();
+            string prefijo = (marcarLider && data.SeatIndex == 0) ? "[C] " : "";
+            sb.Append($"{prefijo}{nombre} {status}\n");
+        }
+        return sb.ToString();
+    }
+
     public void Btn_AbrirEdicionEquipoA()
     {
+        // Solo el capitán del Equipo A puede editar su nombre
+        var miData = GetMyPlayerData();
+        if (miData == null || miData.TeamIndex != 1 || miData.SeatIndex != 0) return;
+
         if (inputEdicionEquipoA != null && GameStateManager.Instance != null)
         {
             inputEdicionEquipoA.gameObject.SetActive(true);
@@ -404,6 +438,10 @@ public class UIGameController : MonoBehaviour
 
     public void Btn_AbrirEdicionEquipoB()
     {
+        // Solo el capitán del Equipo B puede editar su nombre
+        var miData = GetMyPlayerData();
+        if (miData == null || miData.TeamIndex != 2 || miData.SeatIndex != 0) return;
+
         if (inputEdicionEquipoB != null && GameStateManager.Instance != null)
         {
             inputEdicionEquipoB.gameObject.SetActive(true);

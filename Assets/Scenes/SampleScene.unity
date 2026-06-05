@@ -12318,6 +12318,8 @@ MonoBehaviour:
   _RevealedAnswersMask: 0
   _FaceOffChanceUsed:
     _value: 0
+  _IsAnnouncingTurn:
+    _value: 0
   _IsEvaluating:
     _value: 0
   _PendingIsCorrect:
@@ -15471,6 +15473,8 @@ MonoBehaviour:
   inputEdicionEquipoB: {fileID: 2015327199}
   btnArrancarPartida: {fileID: 3970669021805580732}
   btnListo: {fileID: 657105400}
+  btnEditarEquipoA: {fileID: 1330819998}
+  btnEditarEquipoB: {fileID: 1617960824}
   textoCodigoRoom: {fileID: 424436661}
   textoConfigRondas: {fileID: 1768014098}
   textoConfigTiempo: {fileID: 1100877233}
@@ -19279,7 +19283,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: -0.000061035156, y: -0.20465088}
+  m_AnchoredPosition: {x: 0, y: -0.20458984}
   m_SizeDelta: {x: 0, y: 0}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &1707842864
@@ -24374,7 +24378,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: 1.1730347, y: -0.20465088}
+  m_AnchoredPosition: {x: 1.1730957, y: -0.20458984}
   m_SizeDelta: {x: -2.3463, y: 0}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &2088916124
@@ -31157,7 +31161,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: 1.1730347, y: -0.20465088}
+  m_AnchoredPosition: {x: 1.1730957, y: -0.20458984}
   m_SizeDelta: {x: -2.3463, y: 0}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!33 &3592684816978730476
