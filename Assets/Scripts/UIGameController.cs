@@ -26,9 +26,19 @@ public class UIGameController : MonoBehaviour
     [SerializeField] private TMP_InputField inputEdicionEquipoB;
     [SerializeField] private GameObject btnArrancarPartida;
     [SerializeField] private GameObject btnListo;
+    [SerializeField] private TMP_Text   textoBtnListo;     // texto del botón ("ESTOY LISTO" / "NO ESTOY LISTO")
+    [SerializeField] private UnityEngine.UI.Image imagenBtnListo; // imagen del botón (para cambiar color)
+    [SerializeField] private Color colorBtnListo     = new Color(0.55f, 0.85f, 0.55f); // verde
+    [SerializeField] private Color colorBtnNoListo   = new Color(0.95f, 0.45f, 0.45f); // rojo
     [SerializeField] private GameObject btnEditarEquipoA; // solo visible si soy [C] del equipo A
     [SerializeField] private GameObject btnEditarEquipoB; // solo visible si soy [C] del equipo B
     [SerializeField] private TMP_Text textoCodigoRoom;
+
+    [Header("RoomPanel: Reglas del Juego")]
+    [SerializeField] private GameObject panelReglas; // panel oculto con las reglas
+    [SerializeField] private GameObject btnCerrarReglas; // botón X para cerrar (opcional)
+
+    [SerializeField] private GameObject btnSalirEquipo; // botón "Sin equipo" — visible solo si estoy en un equipo
 
     [Header("RoomPanel: Configuración de Partida")]
     [SerializeField] private TMP_Text   textoConfigRondas;    // muestra "Rondas: 5"
@@ -45,6 +55,8 @@ public class UIGameController : MonoBehaviour
     [Header("Set 3D: Pantallas de Puntaje")]
     [SerializeField] private TMP_Text pantallaPuntosRonda;
     [SerializeField] private TMP_Text pantallaPuntosTotalA;
+    [SerializeField] private TMP_Text[] pantallasExtraPuntosTotalA; // pantallas adicionales del equipo A (mesas, etc.)
+    [SerializeField] private TMP_Text[] pantallasExtraPuntosTotalB; // pantallas adicionales del equipo B
     [SerializeField] private TMP_Text pantallaPuntosTotalB;
 
     [Header("HUD 2D: Mi Puntaje y Turno")]
@@ -344,6 +356,11 @@ public class UIGameController : MonoBehaviour
 
         if (pantallaPuntosRonda != null) pantallaPuntosRonda.text = GameStateManager.Instance.RoundScore.ToString();
         if (pantallaPuntosTotalA != null) pantallaPuntosTotalA.text = GameStateManager.Instance.ScoreA.ToString();
+        // Pantallas duplicadas del equipo A (mesas, etc.)
+        if (pantallasExtraPuntosTotalA != null)
+            foreach (var t in pantallasExtraPuntosTotalA) if (t != null) t.text = GameStateManager.Instance.ScoreA.ToString();
+        if (pantallasExtraPuntosTotalB != null)
+            foreach (var t in pantallasExtraPuntosTotalB) if (t != null) t.text = GameStateManager.Instance.ScoreB.ToString();
         if (pantallaPuntosTotalB != null) pantallaPuntosTotalB.text = GameStateManager.Instance.ScoreB.ToString();
 
         if (textoNombreEquipoA != null) textoNombreEquipoA.text = GameStateManager.Instance.NombreEquipoA.ToString();
@@ -400,6 +417,17 @@ public class UIGameController : MonoBehaviour
         bool soyLiderB = myData != null && myData.TeamIndex == 2 && myData.SeatIndex == 0;
         if (btnEditarEquipoA != null) btnEditarEquipoA.SetActive(soyLiderA);
         if (btnEditarEquipoB != null) btnEditarEquipoB.SetActive(soyLiderB);
+
+        // ── Botón "Sin equipo" visible solo si estoy en un equipo ──────────
+        bool estoyEnEquipo = myData != null && myData.TeamIndex != 0;
+        if (btnSalirEquipo != null) btnSalirEquipo.SetActive(estoyEnEquipo);
+
+        // ── Botón "ESTOY LISTO" cambia color/texto según mi estado ─────────
+        bool estoyListo = myData != null && myData.IsReady;
+        if (textoBtnListo != null)
+            textoBtnListo.text = estoyListo ? "NO ESTOY LISTO" : "¡ESTOY LISTO!";
+        if (imagenBtnListo != null)
+            imagenBtnListo.color = estoyListo ? colorBtnNoListo : colorBtnListo;
 
         ActualizarConfigUI();
     }
@@ -472,6 +500,40 @@ public class UIGameController : MonoBehaviour
     public void Btn_ToggleReady() { GetMyPlayerData()?.RPC_SetReady(!GetMyPlayerData().IsReady); }
     public void Btn_UnirseEquipoA() { GetMyPlayerData()?.RPC_JoinTeam(1); }
     public void Btn_UnirseEquipoB() { GetMyPlayerData()?.RPC_JoinTeam(2); }
+    public void Btn_SalirEquipo()   { GetMyPlayerData()?.RPC_JoinTeam(0); }
+
+    /// <summary>
+    /// Copia el código de sala actual al portapapeles del sistema operativo.
+    /// </summary>
+    public void Btn_CopiarCodigoSala()
+    {
+        if (GameStateManager.Instance == null || GameStateManager.Instance.Runner == null) return;
+        string codigo = GameStateManager.Instance.Runner.SessionInfo.Name;
+        if (string.IsNullOrEmpty(codigo)) return;
+        GUIUtility.systemCopyBuffer = codigo;
+        StartCoroutine(MostrarFeedbackCopia());
+    }
+
+    private System.Collections.IEnumerator MostrarFeedbackCopia()
+    {
+        if (textoCodigoRoom == null) yield break;
+        string original = textoCodigoRoom.text;
+        textoCodigoRoom.text = "¡Copiado!";
+        yield return new WaitForSeconds(1.2f);
+        // Restaurar (RefreshRoomUI lo va a reescribir igualmente al siguiente frame)
+        if (textoCodigoRoom != null) textoCodigoRoom.text = original;
+    }
+
+    // ── Reglas del juego (panel local, sin networking) ───────────────
+    public void Btn_AbrirReglas()
+    {
+        if (panelReglas != null) panelReglas.SetActive(true);
+    }
+
+    public void Btn_CerrarReglas()
+    {
+        if (panelReglas != null) panelReglas.SetActive(false);
+    }
 
     // ── Editar rondas (host) ──────────────────────────────────────
     public void Btn_EditarRondas()
@@ -749,6 +811,8 @@ public class UIGameController : MonoBehaviour
                 // Cerrar paneles de opciones de configuración
                 if (panelOpcionesRondas != null) panelOpcionesRondas.SetActive(false);
                 if (panelOpcionesTiempo != null) panelOpcionesTiempo.SetActive(false);
+                // Cerrar panel de reglas si estaba abierto
+                if (panelReglas != null) panelReglas.SetActive(false);
                 // Ocultar panel del animador en el lobby
                 if (panelAnimador != null) panelAnimador.SetActive(false);
                 Cursor.lockState = CursorLockMode.None;
