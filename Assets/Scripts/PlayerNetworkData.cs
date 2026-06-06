@@ -11,6 +11,16 @@ public class PlayerNetworkData : NetworkBehaviour
     [Networked] public int SkinIndex  { get; set; }
     [Networked] public int Aciertos   { get; set; } // respuestas correctas en la partida actual
 
+    // ── Sistema de emotes ────────────────────────────────────────────
+    [Networked] public int EmoteIndex { get; set; }                    // índice del emoji activo, -1 = ninguno
+    [Networked] public TickTimer EmoteTimer { get; set; }              // cuándo expira
+
+    [Header("Emote (burbuja arriba del jugador)")]
+    [SerializeField] private GameObject emoteBubble;                   // GO contenedor de la burbuja
+    [SerializeField] private UnityEngine.UI.Image emoteImage;          // Image que muestra el sprite
+    [SerializeField] private Sprite[] emoteSprites;                    // Array de PNGs de emojis (mismo orden que botones)
+    private int _lastShownEmote = -2;
+
     [SerializeField] private PlayerSkinSelector skinSelector;
     private int _lastAppliedSkinIndex = -1;
     public override void Spawned()
@@ -18,8 +28,14 @@ public class PlayerNetworkData : NetworkBehaviour
         if (skinSelector == null)
             skinSelector = GetComponentInChildren<PlayerSkinSelector>(true);
 
+        // Ocultar burbuja al inicio
+        if (emoteBubble != null) emoteBubble.SetActive(false);
+
         if (Object.HasInputAuthority)
         {
+            // Inicializar emote en -1 (ninguno)
+            if (Object.HasStateAuthority) EmoteIndex = -1;
+
             string miNombre = UIGameController.Instance != null
                 ? UIGameController.Instance.GetPlayerNameInput()
                 : "Jugador";
@@ -39,13 +55,44 @@ public class PlayerNetworkData : NetworkBehaviour
         ApplySkinIfNeeded();
     }
 
+    public override void FixedUpdateNetwork()
+    {
+        // Solo el host resetea el emote cuando expira el timer (3 segundos)
+        if (Object.HasStateAuthority && EmoteIndex >= 0 && EmoteTimer.Expired(Runner))
+        {
+            EmoteIndex = -1;
+            EmoteTimer = TickTimer.None;
+        }
+    }
+
     public override void Render()
     {
         if (skinSelector == null)
             skinSelector = GetComponentInChildren<PlayerSkinSelector>(true);
 
         ApplySkinIfNeeded();
+        ActualizarEmoteVisual();
         if (UIGameController.Instance != null) UIGameController.Instance.RefreshRoomUI();
+    }
+
+    private void ActualizarEmoteVisual()
+    {
+        if (EmoteIndex == _lastShownEmote) return;
+        _lastShownEmote = EmoteIndex;
+
+        bool mostrar = EmoteIndex >= 0 && emoteSprites != null && EmoteIndex < emoteSprites.Length;
+
+        if (emoteBubble != null) emoteBubble.SetActive(mostrar);
+        if (mostrar && emoteImage != null)
+            emoteImage.sprite = emoteSprites[EmoteIndex];
+    }
+
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_SetEmote(int index)
+    {
+        if (index < 0) { EmoteIndex = -1; EmoteTimer = TickTimer.None; return; }
+        EmoteIndex = index;
+        EmoteTimer = TickTimer.CreateFromSeconds(Runner, 3f); // emote dura 3 segundos
     }
 
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]

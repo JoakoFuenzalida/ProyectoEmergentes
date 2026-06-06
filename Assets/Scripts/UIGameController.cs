@@ -40,6 +40,11 @@ public class UIGameController : MonoBehaviour
 
     [SerializeField] private GameObject btnSalirEquipo; // botón "Sin equipo" — visible solo si estoy en un equipo
 
+    [Header("Emotes")]
+    [SerializeField] private GameObject panelEmotes;            // barra con los 6 botones de emojis
+    [Range(0.5f, 3f)] [SerializeField] private float emoteCooldown = 1f; // cooldown anti-spam
+    private float _ultimoEmoteTime = -10f;
+
     [Header("RoomPanel: Configuración de Partida")]
     [SerializeField] private TMP_Text   textoConfigRondas;    // muestra "Rondas: 5"
     [SerializeField] private TMP_Text   textoConfigTiempo;    // muestra "Turno: 30sg"
@@ -502,6 +507,51 @@ public class UIGameController : MonoBehaviour
     public void Btn_UnirseEquipoB() { GetMyPlayerData()?.RPC_JoinTeam(2); }
     public void Btn_SalirEquipo()   { GetMyPlayerData()?.RPC_JoinTeam(0); }
 
+    // ── Emotes ────────────────────────────────────────────────────────
+    /// <summary>
+    /// Reproduce un emote (0=👋, 1=👍, 2=😂, 3=🤔, 4=💪, 5=🎉).
+    /// El cooldown evita spam, y se sincroniza por red a todos los jugadores.
+    /// </summary>
+    public void Btn_Emote(int index)
+    {
+        if (Time.time - _ultimoEmoteTime < emoteCooldown) return;
+        var data = GetMyPlayerData();
+        if (data == null) return;
+        data.RPC_SetEmote(index);
+        _ultimoEmoteTime = Time.time;
+    }
+
+    // Atajos para cada emote (para conectar en los OnClick de cada botón)
+    public void Btn_Emote_Saludo()      { Btn_Emote(0); }
+    public void Btn_Emote_PulgarArriba(){ Btn_Emote(1); }
+    public void Btn_Emote_Risa()        { Btn_Emote(2); }
+    public void Btn_Emote_Pensando()    { Btn_Emote(3); }
+    public void Btn_Emote_Vamos()       { Btn_Emote(4); }
+    public void Btn_Emote_Celebrar()    { Btn_Emote(5); }
+
+    /// <summary>
+    /// Detecta teclas 1-6 para reproducir emotes. Funciona en todos los estados de juego
+    /// (no en lobby/game over porque el panel está oculto). Se bloquea mientras el
+    /// jugador está escribiendo una respuesta para no spamear emotes al teclear.
+    /// </summary>
+    private void DetectarTeclasEmote()
+    {
+        // No detectar si el panel de emotes no está activo (lobby/game over)
+        if (panelEmotes == null || !panelEmotes.activeInHierarchy) return;
+        // No detectar si estoy escribiendo en el input de respuestas o nombre
+        if (inputRespuesta != null && inputRespuesta.gameObject.activeInHierarchy && inputRespuesta.isFocused) return;
+        // No detectar durante pausa
+        if (isPaused) return;
+
+        // Soporta teclas de fila superior y teclado numérico
+        if      (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1)) Btn_Emote(0);
+        else if (Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2)) Btn_Emote(1);
+        else if (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3)) Btn_Emote(2);
+        else if (Input.GetKeyDown(KeyCode.Alpha4) || Input.GetKeyDown(KeyCode.Keypad4)) Btn_Emote(3);
+        else if (Input.GetKeyDown(KeyCode.Alpha5) || Input.GetKeyDown(KeyCode.Keypad5)) Btn_Emote(4);
+        else if (Input.GetKeyDown(KeyCode.Alpha6) || Input.GetKeyDown(KeyCode.Keypad6)) Btn_Emote(5);
+    }
+
     /// <summary>
     /// Copia el código de sala actual al portapapeles del sistema operativo.
     /// </summary>
@@ -690,6 +740,7 @@ public class UIGameController : MonoBehaviour
         {
             case GameStateManager.GameState.Intro:
                 IniciarMusicaJuego();
+                if (panelEmotes != null) panelEmotes.SetActive(true); // mostrar barra de emotes en partida
                 if (tableroPanel3D) tableroPanel3D.SetActive(false); // aún no hay pregunta en Intro
                 if (lobbyPanel) lobbyPanel.SetActive(false);
                 if (roomPanel) roomPanel.SetActive(false);
@@ -760,6 +811,7 @@ public class UIGameController : MonoBehaviour
             case GameStateManager.GameState.GameOver:
                 DetenerSuspenso();
                 if (musicaJuegoSource != null) musicaJuegoSource.Stop();
+                if (panelEmotes != null) panelEmotes.SetActive(false); // ocultar emotes en game over
                 if (tableroPanel3D) tableroPanel3D.SetActive(false);
                 isCounting = false;
                 _buzzerRetryFrames = 0;
@@ -813,6 +865,8 @@ public class UIGameController : MonoBehaviour
                 if (panelOpcionesTiempo != null) panelOpcionesTiempo.SetActive(false);
                 // Cerrar panel de reglas si estaba abierto
                 if (panelReglas != null) panelReglas.SetActive(false);
+                // Ocultar panel de emotes en el lobby
+                if (panelEmotes != null) panelEmotes.SetActive(false);
                 // Ocultar panel del animador en el lobby
                 if (panelAnimador != null) panelAnimador.SetActive(false);
                 Cursor.lockState = CursorLockMode.None;
@@ -915,6 +969,9 @@ public class UIGameController : MonoBehaviour
         }
 
         if (Input.GetKeyDown(KeyCode.Escape)) TogglePauseMenu();
+
+        // ── Emotes con teclas 1-6 (solo si los emotes están visibles y no estoy escribiendo) ──
+        DetectarTeclasEmote();
 
         // Detectar cambios en IsAnnouncingTurn para refrescar visibilidad del input
         var gsmAnuncio = GameStateManager.Instance;
