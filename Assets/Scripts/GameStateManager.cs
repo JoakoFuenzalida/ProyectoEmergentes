@@ -151,7 +151,10 @@ public class GameStateManager : NetworkBehaviour
         Debug.Log("[GSM] Iniciando generación de preguntas con IA...");
         AnimadorIA.NotifyGenerating(true);
 
-        OllamaService.Instance.GenerarPreguntas(5,
+        // Generamos 7 preguntas (5 rondas + 2 de reserva por si CambiarPreguntaSinRonda
+        // se dispara y se agotan las preguntas iniciales). Bajamos de 8 a 7 para reducir
+        // la carga sobre el rate limit del modelo (TPM).
+        OllamaService.Instance.GenerarPreguntas(7,
             preguntas =>
             {
                 // Guardar localmente en el host — NO enviamos RPCs aquí porque los
@@ -612,13 +615,13 @@ public class GameStateManager : NetworkBehaviour
         {
             if ((RevealedAnswersMask & (1 << i)) != 0) continue; // ya revelada
 
-            // Verificar respuesta principal
-            if (cleanAnswer.Contains(Normalizar(RespuestasValidas[i])))
+            // Verificar respuesta principal (con tolerancia a typos via Levenshtein)
+            if (CoincideRespuesta(cleanAnswer, Normalizar(RespuestasValidas[i])))
             {
                 isCorrect = true; answerIndex = i; break;
             }
 
-            // Verificar sinónimos (separados por '|' dentro de cada elemento)
+            // Verificar sinónimos (separados por '|' dentro de cada elemento) — también con tolerancia
             var banco = BancoActivo;
             if (banco != null && CurrentQuestionIndex < banco.Length &&
                 banco[CurrentQuestionIndex].Sinonimos != null &&
@@ -627,7 +630,7 @@ public class GameStateManager : NetworkBehaviour
                 foreach (var sin in banco[CurrentQuestionIndex].Sinonimos[i].Split('|'))
                 {
                     string cleanSin = Normalizar(sin);
-                    if (!string.IsNullOrEmpty(cleanSin) && cleanAnswer.Contains(cleanSin))
+                    if (!string.IsNullOrEmpty(cleanSin) && CoincideRespuesta(cleanAnswer, cleanSin))
                     {
                         isCorrect = true; answerIndex = i; break;
                     }
@@ -726,10 +729,82 @@ public class GameStateManager : NetworkBehaviour
         }
     }
 
-    private static string Normalizar(string s) =>
-        s.ToUpper().Trim()
-         .Replace("Á","A").Replace("É","E").Replace("Í","I").Replace("Ó","O").Replace("Ú","U")
-         .Replace("Ü","U").Replace("Ñ","N");
+    private static string Normalizar(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        s = s.ToUpper().Trim()
+             .Replace("Á","A").Replace("É","E").Replace("Í","I").Replace("Ó","O").Replace("Ú","U")
+             .Replace("Ü","U").Replace("Ñ","N");
+        // Reducir multiples espacios consecutivos a uno solo
+        while (s.Contains("  ")) s = s.Replace("  ", " ");
+        return s;
+    }
+
+    /// <summary>
+    /// Devuelve true si la respuesta del usuario coincide con la esperada,
+    /// con tolerancia a typos según el largo de la palabra:
+    ///   - 1-3 caracteres: debe ser exacta (PHP, C, Go)
+    ///   - 4-6 caracteres: tolera 1 error (Java, React)
+    ///   - 7+ caracteres : tolera 2 errores (Polimorfismo, JavaScript)
+    /// Primero intenta substring exacto (caso barato y común), luego fuzzy.
+    /// </summary>
+    private static bool CoincideRespuesta(string userInput, string esperada)
+    {
+        if (string.IsNullOrEmpty(esperada) || string.IsNullOrEmpty(userInput)) return false;
+
+        // 1) Substring exacto — caso ya cubierto antes, sigue funcionando
+        if (userInput.Contains(esperada)) return true;
+
+        // 2) Fuzzy match SOLO si la esperada es una sola palabra (sin espacios)
+        //    Para multi-word ("VS Code") el substring exacto es más confiable.
+        if (esperada.Contains(' ')) return false;
+
+        int tolerancia = ToleranciaSegunLargo(esperada.Length);
+        if (tolerancia == 0) return false; // palabras cortas requieren exactitud
+
+        // Comparar cada palabra del input contra la esperada
+        foreach (string palabra in userInput.Split(' '))
+        {
+            if (string.IsNullOrEmpty(palabra)) continue;
+            // Optimizacion: si la diferencia de largo ya supera la tolerancia, descartar
+            if (Mathf.Abs(palabra.Length - esperada.Length) > tolerancia) continue;
+            if (LevenshteinDistance(palabra, esperada) <= tolerancia) return true;
+        }
+        return false;
+    }
+
+    private static int ToleranciaSegunLargo(int len)
+    {
+        if (len <= 3) return 0; // PHP, C, Go → exacto
+        if (len <= 6) return 1; // Java, React, Python
+        return 2;               // Polimorfismo, JavaScript, etc.
+    }
+
+    /// <summary>
+    /// Distancia de Levenshtein (minimo de inserciones, borrados o sustituciones).
+    /// Usada para tolerar typos al validar respuestas.
+    /// </summary>
+    private static int LevenshteinDistance(string a, string b)
+    {
+        if (string.IsNullOrEmpty(a)) return string.IsNullOrEmpty(b) ? 0 : b.Length;
+        if (string.IsNullOrEmpty(b)) return a.Length;
+
+        int[,] d = new int[a.Length + 1, b.Length + 1];
+        for (int i = 0; i <= a.Length; i++) d[i, 0] = i;
+        for (int j = 0; j <= b.Length; j++) d[0, j] = j;
+
+        for (int i = 1; i <= a.Length; i++)
+        {
+            for (int j = 1; j <= b.Length; j++)
+            {
+                int cost = (a[i - 1] == b[j - 1]) ? 0 : 1;
+                d[i, j] = Mathf.Min(
+                    Mathf.Min(d[i - 1, j] + 1, d[i, j - 1] + 1),
+                    d[i - 1, j - 1] + cost);
+            }
+        }
+        return d[a.Length, b.Length];
+    }
 
     private void ApplyAnswerResult(bool isCorrect, int answerIndex, int playerId)
     {

@@ -13,7 +13,8 @@ public class OllamaService : MonoBehaviour
     [Header("Configuración Groq")]
     [SerializeField] private string groqUrl = "https://api.groq.com/openai/v1/chat/completions";
     [SerializeField] private string apiKey  = "";  // Pegar la API key de groq.com
-    [SerializeField] private string modelo  = "llama-3.3-70b-versatile";
+    // llama-3.1-8b-instant: 30,000 TPM (vs 12,000 del 70b) — calidad similar para JSON estructurado
+    [SerializeField] private string modelo  = "llama-3.1-8b-instant";
 
     private void Awake()
     {
@@ -23,24 +24,32 @@ public class OllamaService : MonoBehaviour
 
     // ─── Preguntas: 1 por llamada ─────────────────────────────────
 
-    // Subtemas para forzar variedad entre las 5 preguntas de cada partida
+    // Temas curriculares (basados en la malla de Ing. Civil Informatica PUCV)
+    // + temas culturales para variedad. Mezcla 11 + 6 = 17 temas.
     private static readonly string[] _temas =
     {
-        "lenguajes de programacion",
-        "sistemas operativos de escritorio o movil",
-        "bases de datos relacionales o NoSQL",
-        "herramientas de desarrollo (IDE, control de versiones, etc.)",
-        "conceptos de programacion orientada a objetos",
-        "estructuras de datos clasicas",
-        "redes y protocolos de internet",
-        "hardware interno de un computador",
-        "empresas tecnologicas famosas",
-        "roles y profesiones en informatica",
-        "frameworks o librerias de desarrollo web",
-        "seguridad informatica",
-        "servicios de computacion en la nube",
-        "inteligencia artificial y machine learning",
-        "aplicaciones o software de uso cotidiano",
+        // ── CURRICULARES ──
+        "Estructura de Datos",
+        "Base de Datos",
+        "Redes de Computadores",
+        "Inteligencia Artificial",
+        "Hardware y Sistemas Operativos",
+        "Ingenieria Web y Movil",
+        "Ciberseguridad",
+        "Automatas y Compiladores",
+        "Analisis y Diseno de Algoritmos",
+        "Administracion de Proyectos Informaticos",
+        "Experiencia del Usuario",
+        "comandos basicos de Git o GitHub",
+        "herramientas modernas de desarrollo de software",
+
+        // ── CULTURALES ──
+        "snack o bebida que consume un programador codeando",
+        "juego o videojuego favorito de un informatico",
+        "aplicacion que todo informatico tiene instalada",
+        "excusa que da un informatico para no entregar el proyecto",
+        "distraccion favorita de un programador cuando deberia estar trabajando",
+        "frase tipica que dice un programador frustrado",
     };
 
     public void GenerarPreguntas(int cantidad,
@@ -65,6 +74,11 @@ public class OllamaService : MonoBehaviour
             (temasMezclados[k], temasMezclados[j]) = (temasMezclados[j], temasMezclados[k]);
         }
 
+        const int MIN_PREGUNTAS_ACEPTABLE = 5;
+        const float PAUSA_ENTRE_REQUESTS  = 1.5f;
+        // Esperas progresivas para reintentos: 10s, 30s, 60s (la ventana de TPM es de 60s)
+        float[] esperasReintento = { 10f, 30f, 60f };
+
         for (int i = 0; i < cantidad; i++)
         {
             string tema     = temasMezclados[i % temasMezclados.Count];
@@ -76,15 +90,39 @@ public class OllamaService : MonoBehaviour
                 p => resultado = p,
                 e => errorMsg  = e));
 
+            // ── Reintentos múltiples con espera progresiva ──
+            int intento = 0;
+            while (errorMsg != null && intento < esperasReintento.Length)
+            {
+                float espera = esperasReintento[intento];
+                Debug.LogWarning($"[OllamaService] Pregunta {i+1} intento {intento+1} fallo: {errorMsg}. Esperando {espera}s antes de reintentar...");
+                yield return new WaitForSeconds(espera);
+
+                errorMsg = null;
+                yield return StartCoroutine(CoroutineGenerarUnaPregunta(
+                    tema, previas,
+                    p => resultado = p,
+                    e => errorMsg  = e));
+                intento++;
+            }
+
             if (errorMsg != null)
             {
-                onError?.Invoke($"Pregunta {i+1}: {errorMsg}");
+                // Después de 3 reintentos sigue fallando
+                if (lista.Count >= MIN_PREGUNTAS_ACEPTABLE)
+                {
+                    Debug.LogWarning($"[OllamaService] Todos los reintentos fallaron, pero ya tenemos {lista.Count} preguntas. Cortando aqui.");
+                    break;
+                }
+                onError?.Invoke($"Pregunta {i+1} (tras {esperasReintento.Length} reintentos): {errorMsg}");
                 yield break;
             }
 
             lista.Add(resultado);
-            previas.Add(resultado.Pregunta);   // registrar para que el próximo prompt la evite
+            previas.Add(resultado.Pregunta);
             Debug.Log($"[OllamaService] Pregunta {i+1}/{cantidad} OK: {resultado.Pregunta}");
+
+            if (i < cantidad - 1) yield return new WaitForSeconds(PAUSA_ENTRE_REQUESTS);
         }
 
         onComplete?.Invoke(lista.ToArray());
@@ -102,20 +140,41 @@ public class OllamaService : MonoBehaviour
             : "";
 
         string prompt =
-            $"Eres un presentador de un programa de concurso chileno. " +
-            $"Genera UNA pregunta estilo 'Que dice la gente' (encuesta de opinion popular) " +
-            $"sobre el tema: {tema}.\n" +
-            "La pregunta debe ser del tipo: 'Nombre un/una...' o 'Cual es el/la mas...'.\n" +
-            "IMPORTANTE: La pregunta Y todas las respuestas deben estar en ESPAÑOL.\n\n" +
+            "Eres el presentador de un concurso chileno tipo \"Que dice Chile\" / \"Family Feud\".\n\n" +
+            "Los jugadores son estudiantes de Ingenieria Civil Informatica de la PUCV " +
+            "(Pontificia Universidad Catolica de Valparaiso), Chile.\n\n" +
+            $"TEMA: {tema}\n\n" +
+            "Genera UNA pregunta que un estudiante de informatica PUCV responda FACILMENTE.\n" +
+            "La pregunta debe ser de uno de estos tipos:\n" +
+            "- \"Nombre un/una...\"\n" +
+            "- \"Cual es el/la mas popular...\"\n" +
+            "- \"Que hace un programador/informatico cuando...\" (situacional, con respuestas CORTAS y PREDECIBLES — no abierta)\n" +
+            "- \"Diga/Mencione un/una...\"\n\n" +
+            "REGLAS OBLIGATORIAS:\n" +
+            "- ENTRE 4 Y 7 RESPUESTAS — IDEAL 5 o 6, evita siempre 4 si hay mas respuestas populares\n" +
+            "- Usa 6 o 7 cuando la pregunta tiene MUCHAS respuestas faciles (ej: lenguajes, comandos Git, IAs)\n" +
+            "- Las respuestas deben ser TERMINOS POPULARES Y MODERNOS (2024-2025), NO legacy\n" +
+            "- PROHIBIDO incluir tecnologia obsoleta: SVN, Mercurial, CVS, Notepad clasico, PHP4, Flash, etc.\n" +
+            "- Pensa: \"que diria un estudiante de informatica de la PUCV en 2025?\"\n" +
+            "- NO inventes respuestas obscuras para rellenar el banco\n" +
+            "- Cada respuesta vale al menos 8 puntos (NO hay respuestas de 2-5 puntos)\n" +
+            "- Los puntos suman EXACTAMENTE 100, en orden decreciente\n" +
+            "- Distribuciones sugeridas:\n" +
+            "    4 resp: 40-25-20-15\n" +
+            "    5 resp: 30-25-20-15-10\n" +
+            "    6 resp: 25-22-18-15-12-8\n" +
+            "    7 resp: 22-20-17-14-12-8-7\n" +
+            "- Respuestas de 1 a 3 palabras\n" +
+            "- TODO en español, solo ASCII (sin tildes, sin enyes)\n\n" +
+            "EJEMPLOS DE BUENAS PREGUNTAS:\n\n" +
+            "{\"pregunta\":\"Nombre una estructura de datos clasica\",\"respuestas\":[\"Array\",\"Lista\",\"Pila\",\"Arbol\",\"Hash\"],\"puntos\":[30,25,20,15,10]}\n\n" +
+            "{\"pregunta\":\"Nombre un IDE moderno para programar\",\"respuestas\":[\"VS Code\",\"IntelliJ\",\"PyCharm\",\"Cursor\",\"WebStorm\"],\"puntos\":[35,22,18,15,10]}\n\n" +
+            "{\"pregunta\":\"Que come o bebe un programador codeando a las 3am\",\"respuestas\":[\"Energetica\",\"Pizza\",\"Cafe\",\"Bebida\"],\"puntos\":[35,30,20,15]}\n\n" +
+            "{\"pregunta\":\"Nombre una IA o LLM de uso general\",\"respuestas\":[\"Claude\",\"ChatGPT\",\"Gemini\",\"Grok\",\"DeepSeek\"],\"puntos\":[30,25,20,15,10]}\n\n" +
+            "{\"pregunta\":\"Mencione un comando basico de Git\",\"respuestas\":[\"commit\",\"push\",\"pull\",\"clone\",\"merge\",\"add\",\"branch\"],\"puntos\":[22,20,17,14,12,8,7]}\n\n" +
             listaPrevias +
             "Responde SOLO con este JSON exacto (sin markdown, sin texto extra):\n" +
-            "{\"pregunta\":\"...\",\"respuestas\":[\"...\"],\"puntos\":[...]}\n\n" +
-            "Reglas OBLIGATORIAS: " +
-            "todo en ESPAÑOL, " +
-            "solo letras ASCII (sin tildes ni enyes), " +
-            "entre 5 y 8 respuestas (ordenadas de mayor a menor frecuencia popular), " +
-            "los puntos deben sumar exactamente 100 y estar en orden decreciente, " +
-            "respuestas de 1 a 3 palabras cada una.";
+            "{\"pregunta\":\"...\",\"respuestas\":[\"...\"],\"puntos\":[...]}";
 
         yield return StartCoroutine(EnviarPrompt(prompt, raw =>
         {
@@ -237,7 +296,7 @@ public class OllamaService : MonoBehaviour
             model       = modelo,
             messages    = new GroqMessage[] { new GroqMessage { role = "user", content = prompt } },
             max_tokens  = 1024,
-            temperature = 0.9f,
+            temperature = 0.7f,
             stream      = false
         };
 
@@ -433,8 +492,7 @@ public class OllamaService : MonoBehaviour
         {"Clase",               "class|objeto"},
         {"Interfaz",            "interface|contrato"},
         {"Herencia",            "inheritance|extends"},
-        {"Polimorfismo",        "polymorphism"},
-        {"Encapsulamiento",     "encapsulation|encapsulacion"},
+        // (Polimorfismo y Encapsulamiento están más abajo con sus typos)
         // Hardware / infra
         {"RAM",                 "memoria ram|memoria volatil"},
         {"CPU",                 "procesador|unidad procesamiento"},
@@ -454,6 +512,82 @@ public class OllamaService : MonoBehaviour
         {"Red",                 "network|red computadores"},
         {"Servidor",            "server|host"},
         {"Cliente",             "client|browser"},
+        // ── IDEs ──
+        {"VS Code",             "vscode|visual studio code|code editor"},
+        {"IntelliJ",            "intellij idea|idea ide"},
+        {"PyCharm",             "py charm|pycharm ide"},
+        {"Eclipse",             "eclipse ide"},
+        {"NetBeans",            "net beans"},
+        {"Visual Studio",       "vs ide|microsoft visual studio"},
+        {"Sublime",             "sublime text"},
+        {"Atom",                "atom editor"},
+        // ── Frameworks web/mobile ──
+        {"React",               "reactjs|react js|react native"},
+        {"Angular",             "angularjs|angular js"},
+        {"Vue",                 "vuejs|vue js"},
+        {"Django",              "django python"},
+        {"Laravel",             "laravel php"},
+        {"Spring",              "spring boot|java spring"},
+        {"Node",                "nodejs|node js"},
+        {"Flutter",             "flutter dart"},
+        {"Express",             "expressjs|express js"},
+        {"Next",                "nextjs|next js"},
+        // ── IA/LLM ──
+        {"ChatGPT",             "chat gpt|gpt|gpt4|gpt 4"},
+        {"Claude",              "anthropic|anthropic claude"},
+        {"Gemini",              "google gemini|gemini google|bard"},
+        {"Grok",                "grok xai|grok elon|grok x"},
+        {"DeepSeek",            "deep seek|deepsek|deepsick"},
+        {"Llama",               "llama meta|meta llama"},
+        {"Copilot",             "github copilot|gh copilot"},
+        {"Redes Neuronales",    "red neuronal|neural network|nn"},
+        {"Machine Learning",    "ml|aprendizaje automatico|aprendizaje maquina"},
+        {"Deep Learning",       "dl|aprendizaje profundo"},
+        // ── Snacks / Bebidas ──
+        {"Ramen",               "fideos|fideos instantaneos|maruchan|sopa instantanea"},
+        {"Pizza",               "pizzeria|pizza slice"},
+        {"Cafe",                "cafecito|coffee|espresso|cafe negro"},
+        {"Bebida",              "coca|coca cola|gaseosa|refresco|coke"},
+        {"Energetica",          "red bull|monster|bebida energetica|energizante|energy drink"},
+        {"Doritos",             "papas|chips|papas fritas|snacks"},
+        {"Completo",            "hot dog|perro caliente"},
+        {"Empanada",            "empanadas"},
+        // ── Apps / Distracciones ──
+        {"YouTube",             "you tube|yt|youtub"},
+        {"Discord",             "disc|discord chat"},
+        {"Reddit",              "reddit forum|reddit foro"},
+        {"TikTok",              "tik tok|tic toc"},
+        {"Twitch",              "twitch tv|streaming twitch"},
+        {"Instagram",           "insta|ig"},
+        {"WhatsApp",            "wsp|whats|whatsap|whatsap"},
+        {"Stack Overflow",      "stackoverflow|stack|stackoverflow forum"},
+        {"GitHub",              "git hub|github"},
+        {"Spotify",             "spotify musica"},
+        {"Netflix",             "netflix series"},
+        // ── Conceptos OOP / abstractos comunes (typos frecuentes) ──
+        {"Polimorfismo",        "polimorfism|polimorfisno|polimorfiso|polymorphism"},
+        {"Encapsulamiento",     "encapsulacion|encapsulado|encapsulament"},
+        {"Abstraccion",         "abstract|abstracion"},
+        // ── UX/UI (para Experiencia del Usuario) ──
+        {"Usabilidad",          "usability|facil de usar"},
+        {"Wireframe",           "wireframes|esqueleto|maqueta"},
+        {"Prototipo",           "prototype|prototipado"},
+        {"Figma",               "figma diseno"},
+        {"Adobe XD",            "xd|adobe experience"},
+        // ── Gestión de proyectos ──
+        {"Scrum",               "scrum agile|metodologia scrum"},
+        {"Agile",               "agil|metodologia agil"},
+        {"Kanban",              "kanban board|tablero kanban"},
+        {"Jira",                "jira atlassian"},
+        {"Trello",              "trello board"},
+        {"Sprint",              "sprint scrum|ciclo sprint"},
+        // ── Videojuegos populares ──
+        {"League of Legends",   "lol|league|legends"},
+        {"Minecraft",           "mine craft|minecraf"},
+        {"Counter Strike",      "counter strike|cs|csgo|cs go|cs2"},
+        {"Valorant",            "valo|valorant riot"},
+        {"Fortnite",            "fortnaite|fortnight"},
+        {"DotA",                "dota 2|dota2"},
     };
 
     private static string[] GenerarSinonimos(string[] respuestas)
