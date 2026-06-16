@@ -10,3 +10,6 @@
 *_Data/
 *.exe
 *.zip
+# API keys (NO subir a Git)
+groq.env
+*.env

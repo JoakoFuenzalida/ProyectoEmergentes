@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using UnityEngine;
@@ -12,14 +13,55 @@ public class OllamaService : MonoBehaviour
 
     [Header("Configuración Groq")]
     [SerializeField] private string groqUrl = "https://api.groq.com/openai/v1/chat/completions";
-    [SerializeField] private string apiKey  = "";  // Pegar la API key de groq.com
     // llama-3.1-8b-instant: 30,000 TPM (vs 12,000 del 70b) — calidad similar para JSON estructurado
     [SerializeField] private string modelo  = "llama-3.1-8b-instant";
+
+    // ─── API Key: cargada desde archivo externo (NO en el código ni en el Inspector) ──
+    // El archivo `groq.env` se busca en este orden y NO se versiona en Git (ver .gitignore).
+    //   1) Al lado del .exe (para builds distribuidos)
+    //   2) En la raíz del proyecto Unity (para desarrollo en Editor)
+    //   3) En %APPDATA%/QueDiceChile/groq.env (fallback persistente)
+    // Formato del archivo: una sola línea con la API key, sin comillas ni espacios.
+    private string apiKey = "";
 
     private void Awake()
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
+        CargarApiKey();
+    }
+
+    /// <summary>
+    /// Busca el archivo `groq.env` en varias ubicaciones y carga la API key.
+    /// Si no encuentra el archivo, loguea un error claro y el servicio queda inactivo.
+    /// </summary>
+    private void CargarApiKey()
+    {
+        string[] rutasBusqueda = {
+            Path.Combine(Application.dataPath, "..", "groq.env"),                  // Raíz del proyecto (Editor)
+            Path.Combine(Path.GetDirectoryName(Application.dataPath), "groq.env"), // Al lado del .exe (Build)
+            Path.Combine(Application.persistentDataPath, "groq.env")               // %APPDATA% (fallback)
+        };
+
+        foreach (string ruta in rutasBusqueda)
+        {
+            try
+            {
+                if (File.Exists(ruta))
+                {
+                    apiKey = File.ReadAllText(ruta).Trim();
+                    if (!string.IsNullOrEmpty(apiKey))
+                    {
+                        Debug.Log($"[OllamaService] API key cargada desde: {ruta}");
+                        return;
+                    }
+                }
+            }
+            catch (Exception e) { Debug.LogWarning($"[OllamaService] Error leyendo {ruta}: {e.Message}"); }
+        }
+
+        Debug.LogError("[OllamaService] No se encontró 'groq.env' en ninguna ruta. Crea el archivo con tu API key. Rutas buscadas:\n" +
+                       string.Join("\n", rutasBusqueda));
     }
 
     // ─── Preguntas: 1 por llamada ─────────────────────────────────
